@@ -15,4 +15,5 @@ build_output.txt
 build_*.log
 *.original
 *.carousel
-release/
+release/*
+!release/README.md
