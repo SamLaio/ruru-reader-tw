@@ -27,16 +27,12 @@ void HomeActivity::taskTrampoline(void* param) {
 }
 
 int HomeActivity::getMenuItemCount() const {
-  int count = 4;  // My Library, Recents, File transfer, Settings
-  if (!recentBooks.empty()) {
-    count += recentBooks.size();
+  if (homeMode == HomeMode::RECENTS) {
+    // RECENTS 模式：只有書本可選
+    return static_cast<int>(recentBooks.size());
   }
-  if (hasOpdsUrl) {
-    count++;
-  }
-  if (hasjianguoUrl) count++;
-  return count;
-
+  // NORMAL 模式：書本 + 2個大按鈕（檔案區/最近閱讀）+ 快捷三鍵
+  return static_cast<int>(recentBooks.size()) + 2 + 3;
 }
 
 
@@ -45,6 +41,7 @@ void HomeActivity::loadRecentBooks(int maxBooks) {
   const auto& books = RECENT_BOOKS.getBooks();
   recentBooks.reserve(std::min(static_cast<int>(books.size()), maxBooks));
 
+  int skippedMissing = 0;
   for (const RecentBook& book : books) {
     // Limit to maximum number of recent books
     if (recentBooks.size() >= maxBooks) {
@@ -53,11 +50,26 @@ void HomeActivity::loadRecentBooks(int maxBooks) {
 
     // Skip if file no longer exists
     if (!SdMan.exists(book.path.c_str())) {
+      skippedMissing++;
       continue;
     }
 
     recentBooks.push_back(book);
   }
+
+  // stage15.57: FLOW 冷開機/睡醒後不可因 SD exists 全部誤判而整排空白。
+  // 若 recent.bin 有資料但每本都被判不存在，保留原清單顯示；真正開書時 ReaderActivity 仍會檢查檔案。
+  if (recentBooks.empty() && !books.empty()) {
+    Serial.printf("[%lu] [HOME] All recent paths failed exists check (%d). Keeping recent list for Flow.\n",
+                  millis(), skippedMissing);
+    for (const RecentBook& book : books) {
+      if (recentBooks.size() >= maxBooks) {
+        break;
+      }
+      recentBooks.push_back(book);
+    }
+  }
+
 }
 
 void HomeActivity::loadRecentCovers(int coverHeight) {
@@ -140,26 +152,74 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
     progress++;
   }
 
+  // 讀進度百分比（v4 recent.bin 已快取則跳過 epub.load，只補還沒有的）
+  for (RecentBook& book : recentBooks) {
+    if (book.progressPercent >= 0) continue;  // 已從 recent.bin v4 讀到，不重算
+    if (!StringUtils::checkFileExtension(book.path, ".epub")) continue;
+    Epub epub(book.path, "/.crosspoint");
+    if (!epub.load(false, true)) continue;
+    const int spineCount = epub.getSpineItemsCount();
+    if (spineCount <= 0) continue;
+    FsFile pf;
+    if (!SdMan.openFileForRead("HOME_PROG", epub.getCachePath() + "/progress.bin", pf)) continue;
+    uint8_t data[6] = {0};
+    const int dataSize = pf.read(data, sizeof(data));
+    pf.close();
+    if (dataSize != 4 && dataSize != 6) continue;
+    const int spineIdx = data[0] + (data[1] << 8);
+    if (spineIdx < 0 || spineIdx >= spineCount) continue;
+    book.progressPercent = spineIdx * 100 / spineCount;
+    RECENT_BOOKS.updateProgress(book.path, book.progressPercent);  // 回寫到 v4 recent.bin
+  }
+
   recentsLoaded = true;
   recentsLoading = false;
 }
 
+void HomeActivity::loadSdDirs() {
+  sdDirs.clear();
+  constexpr int maxDirs = 8;  // 最多顯示 8 個目錄
+  auto root = SdMan.open("/");
+  if (!root) return;
+  root.rewindDirectory();
+  for (auto file = root.openNextFile(); file; file = root.openNextFile()) {
+    if (file.isDirectory()) {
+      char name[256];
+      file.getName(name, sizeof(name));
+      // 跳過隱藏目錄（.crosspoint 等）
+      if (name[0] != '.') {
+        sdDirs.emplace_back(name);
+      }
+    }
+    file.close();
+    if (static_cast<int>(sdDirs.size()) >= maxDirs) break;
+  }
+  root.close();
+}
+
 void HomeActivity::onEnter() {
   Activity::onEnter();
-
-
-
-
-
   renderingMutex = xSemaphoreCreateMutex();
-  // Check if OPDS browser URL is configured
-  hasOpdsUrl = strlen(SETTINGS.opdsServerUrl) > 0;
   hasjianguoUrl = strlen(SETTINGS.jgUsername) > 0;
 
   selectorIndex = 0;
 
   auto metrics = UITheme::getInstance().getMetrics();
+
+  // stage21: 保留上一次的 coverBuffer（從閱讀器返回時可直接復原畫面）
+  // 只在書單有實際變化時才清掉 buffer；先記住書單舊長度
+  const int prevBookCount = static_cast<int>(recentBooks.size());
+  const std::string prevFirstPath = recentBooks.empty() ? "" : recentBooks[0].path;
+
   loadRecentBooks(metrics.homeRecentBooksCount);
+  loadSdDirs();
+
+  // 書單改了（新書被開啟，排序變了）→ 舊 buffer 畫面不符，清掉
+  const bool bookListChanged = (static_cast<int>(recentBooks.size()) != prevBookCount) ||
+                               (!recentBooks.empty() && recentBooks[0].path != prevFirstPath);
+  if (bookListChanged) {
+    freeCoverBuffer();
+  }
 
   // stage15.6: 封面預載 — 在 onEnter 階段就把 cover thumb 載 RAM
   //            原本要等第一次 render 完才開始載、會看到「先空白、後跳出圖」的閃
@@ -191,9 +251,8 @@ void HomeActivity::onExit() {
   }
   vSemaphoreDelete(renderingMutex);
   renderingMutex = nullptr;
-
-  // Free the stored cover buffer if any
-  freeCoverBuffer();
+  // coverBuffer is kept alive across onExit/onEnter so returning from reader avoids re-reading SD.
+  // It is freed in onEnter if the book list changes, or in the destructor (stack unwind).
 }
 
 bool HomeActivity::storeCoverBuffer() {
@@ -239,44 +298,63 @@ void HomeActivity::freeCoverBuffer() {
 }
 
 void HomeActivity::loop() {
-  const bool prevPressed = mappedInput.wasPressed(MappedInputManager::Button::Up) ||
-                           mappedInput.wasPressed(MappedInputManager::Button::Left);
-  const bool nextPressed = mappedInput.wasPressed(MappedInputManager::Button::Down) ||
-                           mappedInput.wasPressed(MappedInputManager::Button::Right);
+  const bool prevPressed = mappedInput.wasReleased(MappedInputManager::Button::Up) ||
+                           mappedInput.wasReleased(MappedInputManager::Button::Left);
+  const bool nextPressed = mappedInput.wasReleased(MappedInputManager::Button::Down) ||
+                           mappedInput.wasReleased(MappedInputManager::Button::Right);
 
   const int menuCount = getMenuItemCount();
 
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    // Calculate dynamic indices based on which options are available
-    int idx = 0;
-    int menuSelectedIndex = selectorIndex - static_cast<int>(recentBooks.size());
-    const int myLibraryIdx = idx++;
-    const int recentsIdx = idx++;
-    const int opdsLibraryIdx = hasOpdsUrl ? idx++ : -1;
-    const int jgLibraryIdx = hasjianguoUrl ? idx++ : -1;
-    const int fileTransferIdx = idx++;
-    const int settingsIdx = idx;
+  // RECENTS 模式按 Back → 回 NORMAL
+  if (homeMode == HomeMode::RECENTS &&
+      mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+    homeMode = HomeMode::NORMAL;
+    selectorIndex = 0;
+    coverRendered = false;
+    coverBufferStored = false;
+    updateRequired = true;
+    return;
+  }
 
-    if (selectorIndex < recentBooks.size()) {
-      onSelectBook(recentBooks[selectorIndex].path);
-    } else if (menuSelectedIndex == myLibraryIdx) {
-      onMyLibraryOpen();
-    } else if (menuSelectedIndex == recentsIdx) {
-      onRecentsOpen();
-    } else if (menuSelectedIndex == opdsLibraryIdx) {
-      onOpdsBrowserOpen();
-    } else if (menuSelectedIndex == jgLibraryIdx) {
-      onJianGuoYunOpen();
-    } else if (menuSelectedIndex == fileTransferIdx) {
-      onFileTransferOpen();
-    } else if (menuSelectedIndex == settingsIdx) {
-      onSettingsOpen();
+  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    const int bookCount = static_cast<int>(recentBooks.size());
+    if (homeMode == HomeMode::RECENTS) {
+      // RECENTS 模式：只有書本，直接開書
+      if (selectorIndex < bookCount) {
+        onSelectBook(recentBooks[selectorIndex].path);
+      }
+    } else {
+      // NORMAL 模式：書封可選開書 + 2大按鈕 + 快捷三鍵
+      if (selectorIndex < bookCount) {
+        // 書封區 → 直接開書
+        onSelectBook(recentBooks[selectorIndex].path);
+      } else {
+        const int menuIdx = selectorIndex - bookCount;
+        if (menuIdx == 0) {
+          // 檔案區 → MyLibrary
+          onMyLibraryOpen();
+        } else if (menuIdx == 1) {
+          // 最近閱讀 → 切換到 RECENTS 模式
+          homeMode = HomeMode::RECENTS;
+          selectorIndex = 0;
+          coverRendered = false;
+          coverBufferStored = false;
+          updateRequired = true;
+        } else if (menuIdx >= 2) {
+          const int quickIdx = menuIdx - 2;
+          if (quickIdx == 0) onFileTransferOpen();
+          else if (quickIdx == 1) onSettingsOpen();
+          else if (quickIdx == 2) onBluetoothOpen();
+        }
+      }
     }
   } else if (prevPressed) {
     selectorIndex = (selectorIndex + menuCount - 1) % menuCount;
+    coverBufferStored = false;  // selectorIndex 改變，封面需要重繪
     updateRequired = true;
   } else if (nextPressed) {
     selectorIndex = (selectorIndex + 1) % menuCount;
+    coverBufferStored = false;  // selectorIndex 改變，封面需要重繪
     updateRequired = true;
   }
 }
@@ -301,46 +379,46 @@ void HomeActivity::render() {
   renderer.clearScreen();
   bool bufferRestored = coverBufferStored && restoreCoverBuffer();
 
-  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.homeTopPadding}, nullptr);
+  const char* headerTitle    = (homeMode == HomeMode::RECENTS) ? "最近閱讀" : nullptr;
+  const char* headerSubtitle = (homeMode == HomeMode::RECENTS) ? "< Back" : nullptr;
+  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.homeTopPadding}, headerTitle, headerSubtitle);
 
-  GUI.drawRecentBookCover(renderer, Rect{0, metrics.homeTopPadding, pageWidth, metrics.homeCoverTileHeight},
-                          recentBooks, selectorIndex, coverRendered, coverBufferStored, bufferRestored,
-                          std::bind(&HomeActivity::storeCoverBuffer, this));
+  const std::vector<UIIcon> quickIcons = {UIIcon::Wifi, UIIcon::Settings, UIIcon::Hotspot};
+  const std::vector<const char*> quickLabels = {"WiFi", "設定", "藍芽"};
+  const int bookCount = static_cast<int>(recentBooks.size());
 
-  // Build menu items dynamically (stage15.8: 加 menuIcons 對應、給選單畫 icon)
-std::vector<const char*> menuItems = {"挑選一本書", "最近閱讀"};
-std::vector<UIIcon> menuIcons = {UIIcon::Folder, UIIcon::Recent};
+  if (homeMode == HomeMode::RECENTS) {
+    // ── RECENTS 模式：整個畫面都是書封（含進度條），無快捷鍵 ──
+    const int coverH = pageHeight - metrics.homeTopPadding;
+    GUI.drawRecentBookCover(renderer, Rect{0, metrics.homeTopPadding, pageWidth, coverH},
+                            recentBooks, selectorIndex, coverRendered, coverBufferStored, bufferRestored,
+                            std::bind(&HomeActivity::storeCoverBuffer, this));
+  } else {
+    // ── NORMAL 模式：書封 + 兩個大按鈕 + 快捷三鍵 ──
+    GUI.drawRecentBookCover(renderer, Rect{0, metrics.homeTopPadding, pageWidth, metrics.homeCoverTileHeight},
+                            recentBooks, selectorIndex, coverRendered, coverBufferStored, bufferRestored,
+                            std::bind(&HomeActivity::storeCoverBuffer, this));
 
-if (hasOpdsUrl) {
-    menuItems.push_back("OPDS 瀏覽器");
-    menuIcons.push_back(UIIcon::Library);
-}
-if (hasjianguoUrl) {
-    menuItems.push_back("堅果雲");
-    menuIcons.push_back(UIIcon::Library);
-}
-
-
-menuItems.push_back("wifi功能");
-menuIcons.push_back(UIIcon::Wifi);
-menuItems.push_back("設定");
-menuIcons.push_back(UIIcon::Settings);
-
-  // stage15.25 (修正螢幕尺寸誤判 + 嚕寶要 menu 置底):
-  //   螢幕實際 800px、menu 緊接 cover tile 下方、貼螢幕真實底邊
-  //   menu 高度 = 螢幕剩餘空間 - 底部 10px 邊距
-  const int menuRectY = metrics.homeTopPadding + metrics.homeCoverTileHeight + 20;  // 緊接 cover 區、留 20px 呼吸
-  const int menuRectH = pageHeight - menuRectY - 10;
-  GUI.drawButtonMenu(
-      renderer,
-      Rect{0, menuRectY, pageWidth, menuRectH},
-      static_cast<int>(menuItems.size()), selectorIndex - recentBooks.size(),
-      [&menuItems](int index) { return std::string(menuItems[index]); },
-      [&menuIcons](int index) { return menuIcons[index]; });
-
-  // stage15.20: 嚕寶不要底下「選擇 向上 向下」那排提示、首頁直接拿掉
-  // const auto labels = mappedInput.mapLabels("", "選擇", "向上", "向下");
-  // GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+    const int coverBottomY = metrics.homeTopPadding + metrics.homeCoverTileHeight;
+    const int menuRectY = coverBottomY + 8;
+    const int menuRectH = pageHeight - menuRectY - 4;
+    const int menuSelIdx = selectorIndex - bookCount;
+    GUI.drawButtonMenu(
+        renderer,
+        Rect{0, menuRectY, pageWidth, menuRectH},
+        5, menuSelIdx,
+        [&quickLabels](int index) -> std::string {
+          if (index == 0) return "檔案區";
+          if (index == 1) return "最近閱讀";
+          return std::string(quickLabels[index - 2]);
+        },
+        [&quickIcons](int index) -> UIIcon {
+          if (index == 0) return UIIcon::Folder;
+          if (index == 1) return UIIcon::Book;
+          return quickIcons[index - 2];
+        },
+        2);
+  }
 
   renderer.displayBuffer();
 
