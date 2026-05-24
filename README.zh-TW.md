@@ -149,7 +149,8 @@ stage29 新增 OPDS 瀏覽器，可從電腦端 OPDS server 直接抓書到 SD �
 | :--- | :--- | :--- | :--- |
 | iDal-10822 | 可用 | 可用，keycode `0x4E` | 主要使用 |
 | E1 Control | 可用 | 可用，keycode `0x4B` | 備用 |
-| HBTR003-XT | 不穩 | - | RPA 不穩，建議改用 iDal / E1 |
+| HBTR003-XT | 可用 | 可用 | stage7-9 藍芽多輪修復後可穩定使用（RPA / addrType / heap） |
+| Keykey mini | 可用 | 可用 | — |
 
 ### 大書相容性
 
@@ -268,7 +269,7 @@ ruru-reader-tw/
 | OPDS Catalog | 只走根目錄 → 分類 → 書本三層 | 不支援 OPDS 1.2 進階 catalog discovery |
 | OTA 線上更新 | stage29 已砍 | 換版只能用 USB 刷機，省 127 KB flash |
 | Reader 字體 | 依字級拆字集（10/12/17pt） | 部分罕用字可能缺字，可上傳自訂 `.epdfont` 補 |
-| 藍芽翻頁器 | 僅實機測過 iDal-10822 / E1 Control | 其他型號可能要改 keycode profile |
+| 藍芽翻頁器 | 實機測過 iDal-10822 / E1 Control / HBTR003-XT / Keykey mini | 其他型號可能要改 keycode profile |
 
 ## 致謝
 
