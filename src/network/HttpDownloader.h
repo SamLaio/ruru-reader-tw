@@ -1,5 +1,6 @@
 #pragma once
 #include <SDCardManager.h>
+#include <Stream.h>
 
 #include <functional>
 #include <string>
@@ -25,9 +26,11 @@ class HttpDownloader {
    * @param outContent The fetched content (output)
    * @return true if fetch succeeded, false on error
    */
-  static bool fetchUrl(const std::string& url, std::string& outContent);
+  static bool fetchUrl(const std::string& url, std::string& outContent, const char* acceptHeader = nullptr);
 
-  static bool fetchUrl(const std::string& url, Stream& stream);
+  static bool fetchUrl(const std::string& url, Stream& stream, const char* acceptHeader = nullptr);
+
+  static int getLastHttpStatusCode();
 
   /**
    * Download a file to the SD card.
@@ -37,8 +40,6 @@ class HttpDownloader {
    * @return DownloadError indicating success or failure type
    */
   static DownloadError downloadToFile(const std::string& url, const std::string& destPath,
-                                      ProgressCallback progress = nullptr);
-  static DownloadError downloadToFile_jg(const std::string& url, const std::string& destPath,
                                       ProgressCallback progress = nullptr);
  private:
   static constexpr size_t DOWNLOAD_CHUNK_SIZE = 2048;

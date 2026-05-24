@@ -1,3 +1,6 @@
+#ifndef DISABLE_OPDS
+
+#ifndef DISABLE_CALIBRE
 #include "CalibreSettingsActivity.h"
 
 #include <GfxRenderer.h>
@@ -189,3 +192,6 @@ void CalibreSettingsActivity::render() {
 
   renderer.displayBuffer();
 }
+#endif
+
+#endif  // DISABLE_OPDS
