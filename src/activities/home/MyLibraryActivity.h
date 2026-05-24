@@ -64,7 +64,7 @@ class MyLibraryActivity final : public ActivityWithSubactivity {
       // CANCEL_SEARCH = 6   // 取消搜索
   };
   TopOption topSelectorIndex = TopOption::OPEN;
-  const int topOptionCount = 7;
+  const int topOptionCount = 5;
   char SEARCH_KEYWORD[100] = "賽博"; // 搜索关键词（示例：包含“赛博”的文件）
 
 

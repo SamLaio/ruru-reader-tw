@@ -7,6 +7,7 @@
 #include <SDCardManager.h>
 #include <SPI.h>
 #include <builtinFonts/all.h>
+#include <esp_task_wdt.h>
 
 #include <cstring>
 
@@ -40,6 +41,12 @@ HalGPIO gpio;
 MappedInputManager mappedInputManager(gpio);
 GfxRenderer renderer(display);
 Activity* currentActivity;
+
+namespace {
+void resetWatchdog() {
+  esp_task_wdt_reset();
+}
+}  // namespace
 
 // Fonts
 EpdFont bookerly14RegularFont(&notosans_18_bold);
@@ -149,6 +156,7 @@ void verifyPowerButtonDuration() {
   gpio.update();
   // Needed because inputManager.isPressed() may take up to ~500ms to return the correct state
   while (!gpio.isPressed(HalGPIO::BTN_POWER) && millis() - start < 1000) {
+    resetWatchdog();
     delay(10);  // only wait 10ms each iteration to not delay too much in case of short configured duration.
     gpio.update();
   }
@@ -156,6 +164,7 @@ void verifyPowerButtonDuration() {
   t2 = millis();
   if (gpio.isPressed(HalGPIO::BTN_POWER)) {
     do {
+      resetWatchdog();
       delay(10);
       gpio.update();
     } while (gpio.isPressed(HalGPIO::BTN_POWER) && gpio.getHeldTime() < calibratedPressDuration);
@@ -174,6 +183,7 @@ void verifyPowerButtonDuration() {
 void waitForPowerRelease() {
   gpio.update();
   while (gpio.isPressed(HalGPIO::BTN_POWER)) {
+    resetWatchdog();
     delay(50);
     gpio.update();
   }
@@ -185,6 +195,7 @@ void enterDeepSleep() {
   uint32_t waitStart = millis();
   const uint32_t MAX_WAIT_TIME = 5000; // 最多等5秒
   while (!APP_STATE.isRenderComplete) {
+    resetWatchdog();
     Serial.printf("[%lu] [MAIN] Waiting for main render to complete...\n", millis());
     vTaskDelay(100 / portTICK_PERIOD_MS); // 每100ms检查一次
     
@@ -297,6 +308,7 @@ void setup() {
     // force serial for debugging
   Serial.begin(115200);
   delay(500);
+  resetWatchdog();
   Serial.printf("[%lu] [DBG] setup() start - FIRMWARE DEBUG BUILD 001\n", millis());
   Serial.flush();
 
@@ -310,6 +322,7 @@ void setup() {
     // Wait up to 3 seconds for Serial to be ready to catch early logs
     unsigned long start = millis();
     while (!Serial && (millis() - start) < 3000) {
+      resetWatchdog();
       delay(10);
     }
   }
@@ -423,6 +436,7 @@ void setup() {
 
 
 void loop() {
+  resetWatchdog();
   static unsigned long maxLoopDuration = 0;
   const unsigned long loopStartTime = millis();
   static unsigned long lastMemPrint = 0;
@@ -484,7 +498,9 @@ void loop() {
 
   const unsigned long activityStartTime = millis();
   if (currentActivity) {
+    resetWatchdog();
     currentActivity->loop();
+    resetWatchdog();
   }
   const unsigned long activityDuration = millis() - activityStartTime;
 

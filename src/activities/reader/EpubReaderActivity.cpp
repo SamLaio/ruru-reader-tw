@@ -5,6 +5,7 @@
 #include <GfxRenderer.h>
 #include <SDCardManager.h>
 #include <Serialization.h>
+#include <esp_task_wdt.h>
 
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
@@ -33,6 +34,10 @@ constexpr uint32_t WALLPAPER_PXC_MAGIC = 0x31584350;   // "PXC1"
 constexpr uint16_t WALLPAPER_PXC_VERSION = 1;
 constexpr char WALLPAPER_PXC_PATH[] = "/.crosspoint/wallpaper_bg.pxc";
 constexpr uint8_t WALLPAPER_PXC_FIXED_ORIENTATION = CrossPointSettings::ORIENTATION::PORTRAIT;
+
+void resetWatchdog() {
+  esp_task_wdt_reset();
+}
 
 bool loadWallpaperPxcToFramebuffer(const std::string& pxcPath, GfxRenderer& renderer) {
   FsFile input;
@@ -68,6 +73,7 @@ bool loadWallpaperPxcToFramebuffer(const std::string& pxcPath, GfxRenderer& rend
 
   size_t totalRead = 0;
   while (totalRead < payloadSize) {
+    resetWatchdog();
     const size_t toRead = std::min(static_cast<size_t>(1024), static_cast<size_t>(payloadSize - totalRead));
     const int bytesRead = input.read(frameBuffer + totalRead, toRead);
     if (bytesRead <= 0) {
@@ -105,6 +111,7 @@ bool saveWallpaperPxcFromFramebuffer(const std::string& pxcPath, GfxRenderer& re
 
   size_t totalWritten = 0;
   while (totalWritten < payloadSize) {
+    resetWatchdog();
     const size_t toWrite = std::min(static_cast<size_t>(1024), static_cast<size_t>(payloadSize - totalWritten));
     const size_t bytesWritten = output.write(frameBuffer + totalWritten, toWrite);
     if (bytesWritten != toWrite) {
@@ -756,9 +763,12 @@ void EpubReaderActivity::displayTaskLoop() {
     if (updateRequired) {
       updateRequired = false;
       // 加锁保证渲染过程独占
+      resetWatchdog();
       xSemaphoreTake(renderingMutex, portMAX_DELAY);
       APP_STATE.isRenderComplete = false; // 标记渲染开始
+      resetWatchdog();
       renderScreen(); // 执行核心渲染逻辑
+      resetWatchdog();
       APP_STATE.isRenderComplete = true;  // 标记渲染完成（包括 saveProgress）
       APP_STATE.saveToFile();
       xSemaphoreGive(renderingMutex);     // 释放锁
@@ -818,6 +828,7 @@ void EpubReaderActivity::renderScreen() {
   if (!section) {
     const auto filepath = epub->getSpineItem(currentSpineIndex).href;
     Serial.printf("[%lu] [ERS] Loading file: %s, index: %d\n", millis(), filepath.c_str(), currentSpineIndex);
+    resetWatchdog();
     section = std::unique_ptr<Section>(new Section(epub, currentSpineIndex, renderer));
 
     const uint16_t viewportWidth = renderer.getScreenWidth() - orientedMarginLeft - orientedMarginRight;
@@ -830,6 +841,7 @@ void EpubReaderActivity::renderScreen() {
                                   SETTINGS.extraParagraphSpacing, SETTINGS.paragraphAlignment, viewportWidth,
                                   viewportHeight, SETTINGS.hyphenationEnabled,SETTINGS.wordSpacing,SETTINGS.firstlineintented, SETTINGS.embeddedStyle)) {
       Serial.printf("[%lu] [ERS] Cache not found, building...\n", millis());
+      resetWatchdog();
 
       const auto popupFn = [this]() { GUI.drawPopup(renderer, "Indexing..."); };
 
@@ -843,6 +855,7 @@ void EpubReaderActivity::renderScreen() {
     } else {
       Serial.printf("[%lu] [ERS] Cache found, skipping build...\n", millis());
     }
+    resetWatchdog();
 
     if (nextPageNumber == UINT16_MAX) {
       section->currentPage = section->pageCount - 1;
@@ -875,7 +888,8 @@ void EpubReaderActivity::renderScreen() {
   renderer.clearScreen();
     //加背景
     if(SETTINGS.ReadingScreenEnabled){
-      Serial.printf("[%lu] [ERS] 桌布螢幕開啟，渲染桌布螢幕\n");
+      Serial.printf("[%lu] [ERS] 桌布螢幕開啟，渲染桌布螢幕\n", millis());
+      resetWatchdog();
       renderPngSleepScreen(renderer);
     }
 
@@ -902,10 +916,13 @@ void EpubReaderActivity::renderScreen() {
       Serial.printf("[%lu] [ERS] Failed to load page from SD - clearing section cache\n", millis());
       section->clearCache();
       section.reset();
-      return renderScreen();
+      updateRequired = true;
+      return;
     }
     const auto start = millis();
+    resetWatchdog();
     renderContents(std::move(p), orientedMarginTop, orientedMarginRight, orientedMarginBottom, orientedMarginLeft);
+    resetWatchdog();
     Serial.printf("[%lu] [ERS] Rendered page in %dms\n", millis(), millis() - start);
   }
   saveProgress(currentSpineIndex, section->currentPage, section->pageCount);
@@ -972,9 +989,11 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   // Force full refresh for pages with images when anti-aliasing is on,
   // as grayscale tones require half refresh to display correctly
   bool forceFullRefresh = page->hasImages() && SETTINGS.textAntiAliasing;
+  resetWatchdog();
   page->render(renderer, SETTINGS.getReaderFontId(), orientedMarginLeft, orientedMarginTop);
   applySettingMarginPreviewOverlay();
   renderStatusBar(orientedMarginRight, orientedMarginBottom,orientedMarginTop, orientedMarginLeft);
+  resetWatchdog();
   if (forceFullRefresh || pagesUntilFullRefresh <= 1) {
     renderer.displayBuffer(HalDisplay::HALF_REFRESH);
     pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
@@ -991,6 +1010,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   if (SETTINGS.textAntiAliasing) {
     renderer.clearScreen(0x00);
     renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
+    resetWatchdog();
     page->render(renderer, SETTINGS.getReaderFontId(), orientedMarginLeft, orientedMarginTop);
     applySettingMarginPreviewOverlay();
     renderer.copyGrayscaleLsbBuffers();
@@ -998,11 +1018,13 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
     // Render and copy to MSB buffer
     renderer.clearScreen(0x00);
     renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
+    resetWatchdog();
     page->render(renderer, SETTINGS.getReaderFontId(), orientedMarginLeft, orientedMarginTop);
     applySettingMarginPreviewOverlay();
     renderer.copyGrayscaleMsbBuffers();
 
     // display grayscale part
+    resetWatchdog();
     renderer.displayGrayBuffer();
     renderer.setRenderMode(GfxRenderer::BW);
   }

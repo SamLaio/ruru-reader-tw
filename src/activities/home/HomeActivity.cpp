@@ -6,6 +6,7 @@
 #include <SDCardManager.h>
 #include <Utf8.h>
 #include <Xtc.h>
+#include <esp_task_wdt.h>
 
 #include <cstring>
 #include <vector>
@@ -20,6 +21,12 @@
 #include "util/StringUtils.h"
 //清理字体内存
 #include "CustomEpdFont.h"
+
+namespace {
+void resetWatchdog() {
+  esp_task_wdt_reset();
+}
+}  // namespace
 
 void HomeActivity::taskTrampoline(void* param) {
   auto* self = static_cast<HomeActivity*>(param);
@@ -66,7 +73,9 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
   Rect popupRect;
 
   int progress = 0;
+  const int progressStep = recentBooks.empty() ? 0 : 90 / static_cast<int>(recentBooks.size());
   for (RecentBook& book : recentBooks) {
+    resetWatchdog();
     if (!book.coverBmpPath.empty()) {
       std::string coverPath = UITheme::getCoverThumbPath(book.coverBmpPath, coverHeight);
       if (!SdMan.exists(coverPath.c_str())) {
@@ -81,7 +90,8 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
             showingLoading = true;
             popupRect = GUI.drawPopup(renderer, "Loading...");
           }
-          GUI.fillPopupProgress(renderer, popupRect, 10 + progress * (90 / recentBooks.size()));
+          GUI.fillPopupProgress(renderer, popupRect, 10 + progress * progressStep);
+          resetWatchdog();
           bool success = epub.generateThumbBmp(coverHeight);
           if (!success) {
             RECENT_BOOKS.updateBook(book.path, book.title, book.author, "");
@@ -99,7 +109,8 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
               showingLoading = true;
               popupRect = GUI.drawPopup(renderer, "Loading...");
             }
-            GUI.fillPopupProgress(renderer, popupRect, 10 + progress * (90 / recentBooks.size()));
+            GUI.fillPopupProgress(renderer, popupRect, 10 + progress * progressStep);
+            resetWatchdog();
             bool success = xtc.generateThumbBmp(coverHeight);
             if (!success) {
               RECENT_BOOKS.updateBook(book.path, book.title, book.author, "");
@@ -251,8 +262,10 @@ void HomeActivity::displayTaskLoop() {
   while (true) {
     if (updateRequired) {
       updateRequired = false;
+      resetWatchdog();
       xSemaphoreTake(renderingMutex, portMAX_DELAY);
       render();
+      resetWatchdog();
       xSemaphoreGive(renderingMutex);
     }
     vTaskDelay(10 / portTICK_PERIOD_MS);

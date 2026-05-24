@@ -2,6 +2,8 @@
 
 #include <GfxRenderer.h>
 
+#include <algorithm>
+
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -140,7 +142,9 @@ void EpubReaderChapterSelectionActivity::loop() {
   } else if (prevReleased) {
     bool isUpKey = mappedInput.wasReleased(MappedInputManager::Button::Up);
     if (skipPage || isUpKey) {
-      selectorIndex = ((selectorIndex / pageItems - 1) * pageItems + totalItems) % totalItems;
+      const int pageCount = (totalItems + pageItems - 1) / pageItems;
+      const int currentPage = selectorIndex / pageItems;
+      selectorIndex = ((currentPage + pageCount - 1) % pageCount) * pageItems;
     } else {
       selectorIndex = (selectorIndex + totalItems - 1) % totalItems;
     }
@@ -148,7 +152,9 @@ void EpubReaderChapterSelectionActivity::loop() {
   } else if (nextReleased) {
     bool isDownKey = mappedInput.wasReleased(MappedInputManager::Button::Down);
     if (skipPage || isDownKey) {
-      selectorIndex = ((selectorIndex / pageItems + 1) * pageItems) % totalItems;
+      const int pageCount = (totalItems + pageItems - 1) / pageItems;
+      const int currentPage = selectorIndex / pageItems;
+      selectorIndex = ((currentPage + 1) % pageCount) * pageItems;
     } else {
       selectorIndex = (selectorIndex + 1) % totalItems;
     }
