@@ -1,4 +1,5 @@
 #pragma once
+#ifndef DISABLE_OTA
 
 #include <functional>
 #include <string>
@@ -37,3 +38,5 @@ class OtaUpdater {
   OtaUpdaterError checkForUpdate();
   OtaUpdaterError installUpdate();
 };
+
+#endif  // DISABLE_OTA

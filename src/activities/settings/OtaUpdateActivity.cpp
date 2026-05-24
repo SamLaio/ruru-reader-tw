@@ -1,3 +1,4 @@
+#ifndef DISABLE_OTA
 #include "OtaUpdateActivity.h"
 
 #include <GfxRenderer.h>
@@ -245,3 +246,5 @@ void OtaUpdateActivity::loop() {
     ESP.restart();
   }
 }
+
+#endif  // DISABLE_OTA

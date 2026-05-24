@@ -30,11 +30,11 @@ inline std::vector<SettingInfo> getSettingsList() {
     SettingInfo::Toggle("抗陽光褪色", &CrossPointSettings::fadingFix,"Sunlight Fading Compensation","Display"),
 
       // --- Reader ---
-      // stage15.32: 字型標籤誠實標示
-      //   3 個 enum 值（BOOKERLY/NOTOSANS/OPENDYSLEXIC）實際全部都綁同一個 jfopenhuninn 粉圓體
-      //   見 main.cpp:45-48 全用 jfopenhuninn_17_regular
+      // stage15.48: 字型標籤誠實標示
+      //   3 個 enum 值（BOOKERLY/NOTOSANS/OPENDYSLEXIC）實際全部都綁同一個思源黑體 TC 子集
+      //   見 main.cpp:45-48 全用 source_han_sans_tc_17_regular
       //   FONT_CUSTOM 才是真的不同字型（從 SD 卡 .epdfont 載入）
-      SettingInfo::Enum("字型", &CrossPointSettings::fontFamily, {"粉圓", "粉圓", "粉圓", "自定義"}, "字型", "Reader"),
+      SettingInfo::Enum("字型", &CrossPointSettings::fontFamily, {"思源黑體", "思源黑體", "思源黑體", "自定義"}, "字型", "Reader"),
       SettingInfo::Enum("字號", &CrossPointSettings::fontSize, {"小", "中", "大", "特大"}, "字號", "Reader"),
     SettingInfo::Enum("行間距", &CrossPointSettings::lineSpacing,  {"Tight", "Normal", "Wide"}, "行間距", "Reader"),
     SettingInfo::Toggle("首行縮排", &CrossPointSettings::firstlineintented, "首行縮排","Reader"),
@@ -77,10 +77,12 @@ inline std::vector<SettingInfo> getSettingsList() {
       SettingInfo::Enum("休眠時間", &CrossPointSettings::sleepTimeout,
                         {"1 min", "5 min", "10 min", "15 min", "30 min"}, "sleepTimeout", "System"),
       //SettingInfo::Toggle("bluetoothEnabled", &CrossPointSettings::bluetoothEnabled, "bluetoothEnabled", "System"),
+      SettingInfo::Enum("語言", &CrossPointSettings::uiLanguage, {"繁中", "简中", "English"}, "uiLanguage", "System"),
 
       // stage10: KOReader Sync 砍掉
       // stage10: 堅果雲配置 砍掉
 
+#ifndef DISABLE_OPDS
       // --- OPDS Browser (web-only, uses CrossPointSettings char arrays) ---
       SettingInfo::String("OPDS Server URL", SETTINGS.opdsServerUrl, sizeof(SETTINGS.opdsServerUrl), "opdsServerUrl",
                           "OPDS Browser"),
@@ -88,5 +90,6 @@ inline std::vector<SettingInfo> getSettingsList() {
                           "OPDS Browser"),
       SettingInfo::String("OPDS Password", SETTINGS.opdsPassword, sizeof(SETTINGS.opdsPassword), "opdsPassword",
                           "OPDS Browser"),
+#endif
   };
 }
