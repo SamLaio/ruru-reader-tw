@@ -399,8 +399,8 @@ void MonoInkTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCo
   }
 }
 
-// ── 主畫面書封（2欄×2排，共4格）─────────────────────────────────────────────
-// 每格 ~232×240，thumb 240px 剛好填滿
+// ── 主畫面書封（stage32 Cover Flow 風格：左小 + 中大 + 右小）─────────────
+// 中心放大封面 + 左右各一本縮小封面、底部顯示書名 / 作者 / 進度條
 void MonoInkTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect,
                                         const std::vector<RecentBook>& recentBooks,
                                         const int selectorIndex, bool& coverRendered,
@@ -424,22 +424,32 @@ void MonoInkTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect,
 
   const int thumbLookupH = MonoInkMetrics::values.homeCoverHeight;  // 240
 
-  constexpr int cols = 2;
-  constexpr int rows = 2;
-  constexpr int gap  = 8;
+  // ── Cover Flow 布局尺寸 ──
+  // 480 寬 / 約 496 高（rect.height）：上半留封面區、底部留書名+作者+進度條
+  constexpr int infoBarH = 60;  // 底部資訊區（書名+作者+進度條）
+  const int coverAreaH = rect.height - infoBarH;
 
-  const int tileW = (rect.width  - gap * (cols - 1)) / cols;   // (480-8)/2 = 236
-  const int tileH = (rect.height - gap * (rows - 1)) / rows;   // (496-8)/2 = 244
+  // 三本書高寬比 = 3:4（標準書封比例）
+  const int centerH = std::min(coverAreaH - 10, 280);
+  const int centerW = centerH * 3 / 4;
+  const int sideH = centerH * 70 / 100;  // 兩側書本 70% 高度
+  const int sideW = sideH * 3 / 4;
 
-  // ── 輔助：畫單一封面磁貼 ──
-  auto drawBookTile = [&](int bookIdx, int tx, int ty, int tw, int th) {
-    const bool sel = hasSel && (bookIdx == curIdx);
+  const int centerX = rect.x + (rect.width - centerW) / 2;
+  const int centerY = rect.y + (coverAreaH - centerH) / 2;
+
+  // 兩側書本水平位置：稍微跟中心封面重疊邊緣，造成「層疊」感
+  const int leftX = centerX - sideW + 20;
+  const int rightX = centerX + centerW - 20;
+  const int sideY = centerY + (centerH - sideH) / 2;
+
+  // ── 輔助：畫單一封面 ──
+  auto drawCover = [&](int bookIdx, int tx, int ty, int tw, int th, bool isCenter) {
+    if (bookIdx < 0 || bookIdx >= count) return;
+    const RecentBook& book = recentBooks[bookIdx];
 
     renderer.fillRect(tx, ty, tw, th, false);
     renderer.drawRect(tx, ty, tw, th, true);
-
-    if (bookIdx < 0 || bookIdx >= count) return;
-    const RecentBook& book = recentBooks[bookIdx];
 
     const std::string cp = UITheme::getCoverThumbPath(book.coverBmpPath, thumbLookupH);
     bool drawn = false;
@@ -455,41 +465,12 @@ void MonoInkTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect,
       }
     }
     if (!drawn) {
-      const int iconSz = std::min(32, std::min(tw, th) - 8);
+      const int iconSz = std::min(isCenter ? 48 : 32, std::min(tw, th) - 8);
       renderer.drawIcon(CoverIcon, tx + (tw - iconSz) / 2, ty + (th - iconSz) / 2, iconSz, iconSz);
     }
 
-    // 書名條（底部黑底白字）
-    std::string title = book.title.empty() ? book.path : book.title;
-    if (book.title.empty()) {
-      const size_t sl = title.find_last_of('/');
-      if (sl != std::string::npos) title = title.substr(sl + 1);
-      const size_t dt = title.find_last_of('.');
-      if (dt != std::string::npos && dt > 0) title = title.substr(0, dt);
-    }
-    const int barH = renderer.getLineHeight(SMALL_FONT_ID) + 4;
-    const int barY = ty + th - barH;
-    renderer.fillRect(tx, barY, tw, barH, true);
-    auto truncTitle = renderer.truncatedText(SMALL_FONT_ID, title.c_str(), tw - 6);
-    renderer.drawText(SMALL_FONT_ID, tx + 3, barY + 2, truncTitle.c_str(), false);
-
-    // 進度條（在書名條下方，書封底部）
-    if (bookIdx >= 0 && bookIdx < count) {
-      const RecentBook& pb = recentBooks[bookIdx];
-      if (pb.progressPercent >= 0) {
-        constexpr int pbH = 4;
-        const int pbY = ty + th - pbH;
-        const int pbW = tw - 4;
-        const int pbX = tx + 2;
-        renderer.fillRect(pbX, pbY, pbW, pbH, false);
-        renderer.drawRect(pbX, pbY, pbW, pbH, true);
-        const int fillW = (pbW - 2) * pb.progressPercent / 100;
-        if (fillW > 0) renderer.fillRect(pbX + 1, pbY + 1, fillW, pbH - 2, true);
-      }
-    }
-
-    // 選中：3px 粗外框（不反黑，封面保持原色；clamp 避免負座標觸發 outside range）
-    if (sel) {
+    // 中心書：3px 粗外框標示「選中」
+    if (isCenter) {
       for (int i = 1; i <= 3; i++) {
         const int bx = std::max(0, tx - i);
         const int by = std::max(0, ty - i);
@@ -498,22 +479,55 @@ void MonoInkTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect,
     }
   };
 
-  // ── 2×2 格局（書本循環顯示，選中書固定在格 0）──
-  // stage23.2: 書本數量少於 4 本時不重複填滿，超出 count 的格子顯示空框
-  for (int row = 0; row < rows; row++) {
-    for (int col = 0; col < cols; col++) {
-      const int slot     = row * cols + col;
-      const int tx = rect.x + col * (tileW + gap);
-      const int ty = rect.y + row * (tileH + gap);
-      if (slot >= count) {
-        drawBookTile(-1, tx, ty, tileW, tileH);
-        continue;
-      }
-      const int bookIdx = (curIdx + slot) % count;
-      drawBookTile(bookIdx, tx, ty, tileW, tileH);
+  // ── 計算左中右書本 index（≥3 本 cyclic、2 本不重複、1 本只中心）──
+  // stage32: 重複的書不要出現，書本少於 3 本就如實顯示
+  int leftIdx = -1;
+  int rightIdx = -1;
+  if (count >= 3) {
+    leftIdx = (curIdx - 1 + count) % count;
+    rightIdx = (curIdx + 1) % count;
+  } else if (count == 2) {
+    // 2 本：右邊放另一本（curIdx 切換後另一本會跑到左邊）
+    const int otherIdx = (curIdx + 1) % count;
+    if (curIdx == 0) {
+      rightIdx = otherIdx;  // 第 1 本選中：右邊顯示第 2 本、左邊空
+    } else {
+      leftIdx = otherIdx;   // 第 2 本選中：左邊顯示第 1 本、右邊空
     }
   }
+  // count == 1：左右都 -1，只顯示中心
 
+  // ── 畫順序：左 → 右 → 中（中心蓋在最上層）──
+  drawCover(leftIdx, leftX, sideY, sideW, sideH, false);
+  drawCover(rightIdx, rightX, sideY, sideW, sideH, false);
+  drawCover(curIdx, centerX, centerY, centerW, centerH, true);
+
+  // ── 底部資訊區：書名 / 作者 / 進度條（只顯示中心選中書）──
+  if (hasSel) {
+    const RecentBook& book = recentBooks[curIdx];
+    const int infoY = rect.y + coverAreaH + 4;
+
+    // 書名（取檔名 last segment）
+    std::string title = book.title.empty() ? book.path : book.title;
+    if (book.title.empty()) {
+      const size_t sl = title.find_last_of('/');
+      if (sl != std::string::npos) title = title.substr(sl + 1);
+      const size_t dt = title.find_last_of('.');
+      if (dt != std::string::npos && dt > 0) title = title.substr(0, dt);
+    }
+    const auto truncTitle = renderer.truncatedText(UI_12_FONT_ID, title.c_str(), rect.width - 20);
+    const int titleW = renderer.getTextWidth(UI_12_FONT_ID, truncTitle.c_str());
+    renderer.drawText(UI_12_FONT_ID, rect.x + (rect.width - titleW) / 2, infoY, truncTitle.c_str());
+
+    // 作者（在書名下方，若有的話）
+    if (!book.author.empty()) {
+      const auto truncAuthor = renderer.truncatedText(SMALL_FONT_ID, book.author.c_str(), rect.width - 20);
+      const int authorW = renderer.getTextWidth(SMALL_FONT_ID, truncAuthor.c_str());
+      const int authorY = infoY + renderer.getLineHeight(UI_12_FONT_ID) + 2;
+      renderer.drawText(SMALL_FONT_ID, rect.x + (rect.width - authorW) / 2, authorY, truncAuthor.c_str());
+    }
+    // stage32: 進度條拿掉（嚕寶要求視覺更乾淨）
+  }
 }
 
 // ── 彈出視窗 ─────────────────────────────────────────────────────────────────
