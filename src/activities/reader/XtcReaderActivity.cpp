@@ -13,10 +13,12 @@
 
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
+#include "LanguageMapper.h"
 #include "MappedInputManager.h"
 #include "RecentBooksStore.h"
 #include "XtcReaderChapterSelectionActivity.h"
 #include "fontIds.h"
+#include "util/AtomicFileWriter.h"
 #include "../../lib/Xtc/Xtc/XtcTypes.h"
 
 namespace {
@@ -190,7 +192,7 @@ void XtcReaderActivity::renderScreen() {
 
   if (currentPage >= xtc->getPageCount()) {
     renderer.clearScreen();
-    renderer.drawCenteredText(UI_12_FONT_ID, 300, "End of book", true, EpdFontFamily::BOLD);
+    renderer.drawCenteredText(UI_12_FONT_ID, 300, getChineseName("End of book"), true, EpdFontFamily::BOLD);
     renderer.displayBuffer();
     return;
   }
@@ -227,7 +229,7 @@ void XtcReaderActivity::renderFullPage() {
     if (!pageBuffer) {
       Serial.printf("[%lu] [XTR] Alloc failed: %lu bytes\n", millis(), slicePageBufferSize);
       renderer.clearScreen();
-      renderer.drawCenteredText(UI_12_FONT_ID, 300, "Memory error", true, EpdFontFamily::BOLD);
+      renderer.drawCenteredText(UI_12_FONT_ID, 300, getChineseName("Memory error"), true, EpdFontFamily::BOLD);
       renderer.displayBuffer();
       return;
     }
@@ -248,7 +250,7 @@ for (int n=0; n<8; n++) {
     if (bytesRead == 0) {
         Serial.printf("[%lu] [XTR] Load slice failed (page=%lu, slice=%d)\n", millis(), renderingPage, n);
         renderer.clearScreen();
-        renderer.drawCenteredText(UI_12_FONT_ID, 300, "Load error", true, EpdFontFamily::BOLD);
+        renderer.drawCenteredText(UI_12_FONT_ID, 300, getChineseName("Load error"), true, EpdFontFamily::BOLD);
         renderer.displayBuffer();
         return;
     }
@@ -272,7 +274,7 @@ if (pagesUntilFullRefresh <= 1) {
         if (bytesRead == 0) {
             Serial.printf("[%lu] [XTR] Load slice failed (page=%lu, slice=%d)\n", millis(), renderingPage, n);
             renderer.clearScreen();
-            renderer.drawCenteredText(UI_12_FONT_ID, 300, "Load error", true, EpdFontFamily::BOLD);
+            renderer.drawCenteredText(UI_12_FONT_ID, 300, getChineseName("Load error"), true, EpdFontFamily::BOLD);
             renderer.displayBuffer();
             return;
         }
@@ -286,7 +288,7 @@ if (pagesUntilFullRefresh <= 1) {
         if (bytesRead == 0) {
             Serial.printf("[%lu] [XTR] Load slice failed (page=%lu, slice=%d)\n", millis(), renderingPage, n);
             renderer.clearScreen();
-            renderer.drawCenteredText(UI_12_FONT_ID, 300, "Load error", true, EpdFontFamily::BOLD);
+            renderer.drawCenteredText(UI_12_FONT_ID, 300, getChineseName("Load error"), true, EpdFontFamily::BOLD);
             renderer.displayBuffer();
             return;
         }
@@ -304,7 +306,7 @@ if (pagesUntilFullRefresh <= 1) {
         if (bytesRead == 0) {
             Serial.printf("[%lu] [XTR] Load slice failed (page=%lu, slice=%d)\n", millis(), renderingPage, n);
             renderer.clearScreen();
-            renderer.drawCenteredText(UI_12_FONT_ID, 300, "Load error", true, EpdFontFamily::BOLD);
+            renderer.drawCenteredText(UI_12_FONT_ID, 300, getChineseName("Load error"), true, EpdFontFamily::BOLD);
             renderer.displayBuffer();
             return;
         }
@@ -321,7 +323,7 @@ else{
         if (bytesRead == 0) {
             Serial.printf("[%lu] [XTR] Load slice failed (page=%lu, slice=%d)\n", millis(), renderingPage, n);
             renderer.clearScreen();
-            renderer.drawCenteredText(UI_12_FONT_ID, 300, "Load error", true, EpdFontFamily::BOLD);
+            renderer.drawCenteredText(UI_12_FONT_ID, 300, getChineseName("Load error"), true, EpdFontFamily::BOLD);
             renderer.displayBuffer();
             return;
         }
@@ -442,7 +444,7 @@ void XtcReaderActivity::drawSliceContent(int sliceN, bool isGrayscale, bool isLS
 void XtcReaderActivity::gotoPage(uint32_t targetPage) {
     // 前置空指针+合法性校验（终极防护）
     if (!xtc) {
-        Serial.printf("[%lu] [XTR] gotoPage失败：xtc为空\n", millis());
+        Serial.printf("[%lu] [XTR] gotoPage失敗：xtc為空\n", millis());
         currentPage = 0;
         updateRequired = true;
         return;
@@ -450,7 +452,7 @@ void XtcReaderActivity::gotoPage(uint32_t targetPage) {
 
     const uint32_t totalPages = xtc->getPageCount();
     if (totalPages == 0) {
-        Serial.printf("[%lu] [XTR] gotoPage失败：总页数为0\n", millis());
+        Serial.printf("[%lu] [XTR] gotoPage失敗：總頁數為0\n", millis());
         currentPage = 0;
         updateRequired = true;
         return;
@@ -476,7 +478,7 @@ void XtcReaderActivity::gotoPage(uint32_t targetPage) {
     // 加载新批次（添加返回值校验）
     xtc::XtcError loadErr = xtc->loadPageBatchByStart((uint16_t)targetBatchStart);
     if (loadErr != xtc::XtcError::OK) {
-        Serial.printf("[%lu] [XTR] 加载批次失败：%u，降级为仅加载当前页\n", millis(), (uint8_t)loadErr);
+        Serial.printf("[%lu] [XTR] 載入批次失敗：%u，降級為僅載入當前頁\n", millis(), (uint8_t)loadErr);
     }
 
     // 校正加载最大页
@@ -488,27 +490,24 @@ void XtcReaderActivity::gotoPage(uint32_t targetPage) {
     updateRequired = true;
 
     // 打印最终状态（方便调试）
-    Serial.printf("[%lu] [跳转] 最终状态：目标页=%lu, 批次[%lu~%lu], 总页数=%lu\n", 
+    Serial.printf("[%lu] [跳轉] 最終狀態：目標頁=%lu, 批次[%lu~%lu], 總頁數=%lu\n", 
                  millis(), safeTargetPage, targetBatchStart, m_loadedMax, totalPages);
 }
 void XtcReaderActivity::saveProgress() const {
-  FsFile f;
-  if (SdMan.openFileForWrite("XTR", xtc->getCachePath() + "/progress.bin", f)) {
-    uint8_t data[8]; // 8字节，前4字节存页码，后4字节存页表上限
-    // 前4字节：保存当前阅读页码 currentPage
-    data[0] = currentPage & 0xFF;
-    data[1] = (currentPage >> 8) & 0xFF;
-    data[2] = (currentPage >> 16) & 0xFF;
-    data[3] = (currentPage >> 24) & 0xFF;
-    // 后4字节：保存当前页表上限 m_loadedMax
-    data[4] = m_loadedMax & 0xFF;
-    data[5] = (m_loadedMax >> 8) & 0xFF;
-    data[6] = (m_loadedMax >> 16) & 0xFF;
-    data[7] = (m_loadedMax >> 24) & 0xFF;
-    
-    f.write(data, 8);
-    f.close();
-    Serial.printf("[%lu] [进度] 保存成功 → 页码: %lu | 页表上限: %lu\n", millis(), currentPage, m_loadedMax);
+  uint8_t data[8]; // 8字节，前4字节存页码，后4字节存页表上限
+  // 前4字节：保存当前阅读页码 currentPage
+  data[0] = currentPage & 0xFF;
+  data[1] = (currentPage >> 8) & 0xFF;
+  data[2] = (currentPage >> 16) & 0xFF;
+  data[3] = (currentPage >> 24) & 0xFF;
+  // 后4字节：保存当前页表上限 m_loadedMax
+  data[4] = m_loadedMax & 0xFF;
+  data[5] = (m_loadedMax >> 8) & 0xFF;
+  data[6] = (m_loadedMax >> 16) & 0xFF;
+  data[7] = (m_loadedMax >> 24) & 0xFF;
+
+  if (writeBinaryFileAtomic("XTR", xtc->getCachePath() + "/progress.bin", data, sizeof(data))) {
+    Serial.printf("[%lu] [進度] 儲存成功 → 頁碼: %lu | 頁表上限: %lu\n", millis(), currentPage, m_loadedMax);
   }
 }
 
@@ -521,7 +520,7 @@ void XtcReaderActivity::loadProgress() {
       currentPage = data[0] | (data[1] << 8) | (data[2] << 16) | (data[3] << 24);
       uint32_t savedLoadedMax = data[4] | (data[5] << 8) | (data[6] << 16) | (data[7] << 24);
 
-      Serial.printf("[%lu] [进度] 恢复成功 → 页码: %lu | 保存的页表上限: %lu\n", millis(), currentPage, savedLoadedMax);
+      Serial.printf("[%lu] [進度] 恢復成功 → 頁碼: %lu | 儲存的頁表上限: %lu\n", millis(), currentPage, savedLoadedMax);
 
       // 1. 边界防护：和gotoPage完全一致
       const uint32_t totalPages = xtc->getPageCount();
@@ -535,7 +534,7 @@ void XtcReaderActivity::loadProgress() {
       m_loadedMax = targetBatchStart + loadedMaxPage_per - 1;
       if(m_loadedMax >= totalPages) m_loadedMax = totalPages - 1;
 
-      Serial.printf("[进度] 恢复进度后加载批次 → 页码%lu → 批次[%lu~%lu]\n", currentPage, targetBatchStart, m_loadedMax);
+      Serial.printf("[進度] 恢復進度後載入批次 → 頁碼%lu → 批次[%lu~%lu]\n", currentPage, targetBatchStart, m_loadedMax);
     }
     f.close();
   } else {
@@ -544,6 +543,6 @@ void XtcReaderActivity::loadProgress() {
     currentPage = 0;
     m_loadedMax = loadedMaxPage_per - 1;
     if(m_loadedMax >= totalPages) m_loadedMax = totalPages - 1;
-    Serial.printf("[%lu] [进度] 无进度文件 → 初始化页码: 0 | 页表上限: %lu\n", millis(), m_loadedMax);
+    Serial.printf("[%lu] [進度] 無進度檔案 → 初始化頁碼: 0 | 頁表上限: %lu\n", millis(), m_loadedMax);
   }
 }

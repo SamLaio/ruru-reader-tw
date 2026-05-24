@@ -20,9 +20,10 @@ void readAndValidate(FsFile& file, uint8_t& member, const uint8_t maxValue) {
 }
 
 namespace {
-constexpr uint8_t SETTINGS_FILE_VERSION = 6;
+// stage15.48: 版本升到 9（新增 UI 語言）
+constexpr uint8_t SETTINGS_FILE_VERSION = 9;
 // 注意：如果修改了字段数量，需要同步更新这个值
-constexpr uint8_t SETTINGS_COUNT = 46;  // customSleepUsePxc 写到序列末尾
+constexpr uint8_t SETTINGS_COUNT = 54;
 constexpr char SETTINGS_FILE[] = "/.crosspoint/settings.bin";
 
 // Validate front button mapping to ensure each hardware button is unique.
@@ -134,6 +135,15 @@ bool CrossPointSettings::saveToFile() const {
   //把蓝牙写上
   serialization::writePod(outputFile, bluetoothEnabled );
   serialization::writePod(outputFile, customSleepUsePxc);
+  // stage15.4: 直排支援
+  serialization::writePod(outputFile, textLayout);
+  serialization::writePod(outputFile, verticalPageReverse);
+  serialization::writePod(outputFile, underlineOffset);
+  serialization::writePod(outputFile, horizontalLinePosition);
+  serialization::writePod(outputFile, underlineBelowOffset);
+  serialization::writePod(outputFile, underlineAboveOffset);
+  serialization::writePod(outputFile, verticalLineOffset);
+  serialization::writePod(outputFile, uiLanguage);
   // New fields added at end for backward compatibility
   outputFile.close();
 
@@ -149,7 +159,8 @@ bool CrossPointSettings::loadFromFile() {
 
   uint8_t version;
   serialization::readPod(inputFile, version);
-  if (version != 5 && version != SETTINGS_FILE_VERSION) {
+  // stage15.46: 允許舊版設定檔，缺欄位走 fallback 預設值
+  if (version != 5 && version != 6 && version != 7 && version != 8 && version != SETTINGS_FILE_VERSION) {
     Serial.printf("[%lu] [CPS] Deserialization failed: Unknown version %u\n", millis(), version);
     inputFile.close();
     return false;
@@ -305,6 +316,37 @@ bool CrossPointSettings::loadFromFile() {
       if (++settingsRead >= fileSettingsCount) break;
     }
 
+    // stage15.4: 直排兩個欄位（v7+），v5/v6 舊檔走預設值 fallback
+    if (version >= 7) {
+      readAndValidate(inputFile, textLayout, TEXT_LAYOUT_COUNT);
+      if (++settingsRead >= fileSettingsCount) break;
+      serialization::readPod(inputFile, verticalPageReverse);
+      if (++settingsRead >= fileSettingsCount) break;
+    }
+    serialization::readPod(inputFile, underlineOffset);
+    if (++settingsRead >= fileSettingsCount) break;
+    readAndValidate(inputFile, horizontalLinePosition, HORIZONTAL_LINE_POSITION_COUNT);
+    if (++settingsRead >= fileSettingsCount) break;
+    if (version >= 8) {
+      serialization::readPod(inputFile, underlineBelowOffset);
+      if (underlineBelowOffset > 24) underlineBelowOffset = 24;
+      if (++settingsRead >= fileSettingsCount) break;
+      serialization::readPod(inputFile, underlineAboveOffset);
+      if (underlineAboveOffset > 24) underlineAboveOffset = 24;
+      if (++settingsRead >= fileSettingsCount) break;
+      serialization::readPod(inputFile, verticalLineOffset);
+      if (verticalLineOffset > 24) verticalLineOffset = 24;
+      if (++settingsRead >= fileSettingsCount) break;
+    } else {
+      if (underlineOffset > 24) underlineOffset = 24;
+      underlineBelowOffset = underlineOffset;
+      underlineAboveOffset = underlineOffset;
+      verticalLineOffset = underlineOffset;
+    }
+    if (version >= 9) {
+      readAndValidate(inputFile, uiLanguage, UI_LANGUAGE_COUNT);
+      if (++settingsRead >= fileSettingsCount) break;
+    }
     // New fields added at end for backward compatibility
   } while (false);
 
@@ -315,7 +357,8 @@ bool CrossPointSettings::loadFromFile() {
   }
 
   inputFile.close();
-  bluetoothEnabled = 0;//先默认蓝牙关闭
+  // [stage9.1] 移除強制關藍芽 — 上游 ChineseType 因藍芽會 crash 故每次開機關掉，
+  // stage7 修好藍芽後讓 bluetoothEnabled 沿用上次狀態（記住使用者選擇）
   Serial.printf("[%lu] [CPS] Settings loaded from file\n", millis());
   return true;
 }
@@ -343,6 +386,7 @@ float CrossPointSettings::getReaderLineCompression() const {
         case WIDE:
           return 1.0f;
       }
+    // stage12.5: OPENDYSLEXIC 砍掉，fallback 用 NOTOSANS metrics
     case OPENDYSLEXIC:
       switch (lineSpacing) {
         case TIGHT:
@@ -440,17 +484,19 @@ int CrossPointSettings::getReaderFontId() const {
         case EXTRA_LARGE:
           return NOTOSANS_18_FONT_ID;
       }
+    // stage12.5: OPENDYSLEXIC 砍掉，fallback 到 NOTOSANS（用 NOTOSANS case 的程式碼）
     case OPENDYSLEXIC:
       switch (fontSize) {
         case SMALL:
-          return OPENDYSLEXIC_8_FONT_ID;
+          return NOTOSANS_12_FONT_ID;
         case MEDIUM:
         default:
-          return OPENDYSLEXIC_10_FONT_ID;
+          return NOTOSANS_14_FONT_ID;
         case LARGE:
-          return OPENDYSLEXIC_12_FONT_ID;
+          return NOTOSANS_16_FONT_ID;
         case EXTRA_LARGE:
-          return OPENDYSLEXIC_14_FONT_ID;
+          return NOTOSANS_18_FONT_ID;
       }
   }
+  return NOTOSANS_14_FONT_ID;
 }

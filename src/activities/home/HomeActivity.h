@@ -13,25 +13,33 @@ struct RecentBook;
 struct Rect;
 
 class HomeActivity final : public Activity {
+ public:
+  enum class HomeMode { NORMAL, RECENTS };
+
+ private:
   TaskHandle_t displayTaskHandle = nullptr;
   SemaphoreHandle_t renderingMutex = nullptr;
   int selectorIndex = 0;
+  HomeMode homeMode = HomeMode::NORMAL;
   bool updateRequired = false;
   bool recentsLoading = false;
   bool recentsLoaded = false;
   bool firstRenderDone = false;
-  bool hasOpdsUrl = false;
   bool hasjianguoUrl = false;
-  bool coverRendered = false;      // Track if cover has been rendered once
-  bool coverBufferStored = false;  // Track if cover buffer is stored
-  uint8_t* coverBuffer = nullptr;  // HomeActivity's own buffer for cover image
+  bool coverRendered = false;
+  bool coverBufferStored = false;
+  uint8_t* coverBuffer = nullptr;
   std::vector<RecentBook> recentBooks;
+  std::vector<std::string> sdDirs;
   const std::function<void(const std::string& path)> onSelectBook;
   const std::function<void()> onMyLibraryOpen;
   const std::function<void()> onRecentsOpen;
   const std::function<void()> onSettingsOpen;
   const std::function<void()> onFileTransferOpen;
+  const std::function<void()> onBluetoothOpen;
+#ifndef DISABLE_OPDS
   const std::function<void()> onOpdsBrowserOpen;
+#endif
   const std::function<void()> onJianGuoYunOpen;
 
 
@@ -44,21 +52,30 @@ class HomeActivity final : public Activity {
   void freeCoverBuffer();     // Free the stored cover buffer
   void loadRecentBooks(int maxBooks);
   void loadRecentCovers(int coverHeight);
+  void loadSdDirs();
 
  public:
   explicit HomeActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                         const std::function<void(const std::string& path)>& onSelectBook,
                         const std::function<void()>& onMyLibraryOpen, const std::function<void()>& onRecentsOpen,
                         const std::function<void()>& onSettingsOpen, const std::function<void()>& onFileTransferOpen,
-                        const std::function<void()>& onOpdsBrowserOpen, const std::function<void()>& onJianGuoYunOpen)
+                        const std::function<void()>& onBluetoothOpen,
+#ifndef DISABLE_OPDS
+                        const std::function<void()>& onOpdsBrowserOpen,
+#endif
+                        const std::function<void()>& onJianGuoYunOpen)
       : Activity("Home", renderer, mappedInput),
         onSelectBook(onSelectBook),
         onMyLibraryOpen(onMyLibraryOpen),
         onRecentsOpen(onRecentsOpen),
         onSettingsOpen(onSettingsOpen),
         onFileTransferOpen(onFileTransferOpen),
+        onBluetoothOpen(onBluetoothOpen),
+#ifndef DISABLE_OPDS
         onOpdsBrowserOpen(onOpdsBrowserOpen),
+#endif
         onJianGuoYunOpen(onJianGuoYunOpen) {}
+  ~HomeActivity() { freeCoverBuffer(); }
   void onEnter() override;
   void onExit() override;
   void loop() override;

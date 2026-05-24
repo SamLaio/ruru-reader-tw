@@ -29,6 +29,11 @@ class Epub {
   std::unique_ptr<CssParser> cssParser;
   // CSS files
   std::vector<std::string> cssFiles;
+  bool scannedBookWritingMode = false;
+  bool bookHasWritingMode = false;
+  CssWritingMode bookWritingMode = CssWritingMode::HorizontalTb;
+  // stage8: 大書模式（spine>500 或 OPF/nav>100KB），跳過 TOC pass、用粗略 progress
+  bool largeBookMode = false;
 
   bool findContentOpfFile(std::string* contentOpfFile) const;
   bool parseContentOpf(BookMetadataCache::BookMetadata& bookMetadata, bool parseSpine = true);
@@ -37,6 +42,7 @@ class Epub {
   void parseCssFiles() const;
   std::string getCssRulesCache() const;
   bool loadCssRulesFromCache() const;
+  void scanBookWritingMode();
 
  public:
   explicit Epub(std::string filepath, const std::string& cacheDir) : filepath(std::move(filepath)) {
@@ -46,6 +52,7 @@ class Epub {
   ~Epub() = default;
   std::string& getBasePath() { return contentBasePath; }
   bool load(bool buildIfMissing = true, bool skipLoadingCss = false);
+  bool ensureTocLoaded();
   bool clearCache() const;
   void setupCacheDir() const;
   const std::string& getCachePath() const;
@@ -74,4 +81,8 @@ class Epub {
   size_t getBookSize() const;
   float calculateProgress(int currentSpineIndex, float currentSpineRead) const;
   const CssParser* getCssParser() const { return cssParser.get(); }
+  bool hasCssWritingMode() const;
+  CssWritingMode getCssWritingMode() const;
+  // stage8: 是否為大書模式（首次開書跳過 TOC + 粗略 progress）
+  bool isLargeBookMode() const { return largeBookMode; }
 };

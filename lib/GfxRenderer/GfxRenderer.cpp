@@ -1,7 +1,284 @@
 #include "GfxRenderer.h"
 
+#include <algorithm>
+#include <cstdlib>
+#include <cstring>
+#include <vector>
+
 #include <Utf8.h>
 #include <SDCardManager.h>
+
+namespace {
+struct VerticalGlyphMap {
+  uint32_t horizontal;
+  uint32_t vertical;
+};
+
+constexpr VerticalGlyphMap kVerticalGlyphMap[] = {
+    {0x002C, 0xFE10},  // , -> ︐
+    {0xFF0C, 0xFE10},  // ， -> ︐
+    {0x3001, 0xFE11},  // 、 -> ︑
+    {0x002E, 0xFE12},  // . -> ︒
+    {0x3002, 0xFE12},  // 。 -> ︒
+    {0x003A, 0xFE13},  // : -> ︓
+    {0xFF1A, 0xFE13},  // ： -> ︓
+    {0x003B, 0xFE14},  // ; -> ︔
+    {0xFF1B, 0xFE14},  // ； -> ︔
+    {0x0021, 0xFE15},  // ! -> ︕
+    {0xFF01, 0xFE15},  // ！ -> ︕
+    {0x003F, 0xFE16},  // ? -> ︖
+    {0xFF1F, 0xFE16},  // ？ -> ︖
+    {0x201C, 0xFE41},  // “ -> ﹁
+    {0x2018, 0xFE41},  // ‘ -> ﹁
+    {0x300C, 0xFE41},  // 「 -> ﹁
+    {0x201D, 0xFE42},  // ” -> ﹂
+    {0x2019, 0xFE42},  // ’ -> ﹂
+    {0x300D, 0xFE42},  // 」 -> ﹂
+    {0x300E, 0xFE43},  // 『 -> ﹃
+    {0x300F, 0xFE44},  // 』 -> ﹄
+    {0x0028, 0xFE35},  // ( -> ︵
+    {0xFF08, 0xFE35},  // （ -> ︵
+    {0x0029, 0xFE36},  // ) -> ︶
+    {0xFF09, 0xFE36},  // ） -> ︶
+    {0x007B, 0xFE37},  // { -> ︷
+    {0xFF5B, 0xFE37},  // ｛ -> ︷
+    {0x007D, 0xFE38},  // } -> ︸
+    {0xFF5D, 0xFE38},  // ｝ -> ︸
+    {0x3014, 0xFE39},  // 〔 -> ︹
+    {0x3015, 0xFE3A},  // 〕 -> ︺
+    {0x3010, 0xFE3B},  // 【 -> ︻
+    {0x3011, 0xFE3C},  // 】 -> ︼
+    {0x300A, 0xFE3D},  // 《 -> ︽
+    {0x300B, 0xFE3E},  // 》 -> ︾
+    {0x3008, 0xFE3F},  // 〈 -> ︿
+    {0x3009, 0xFE40},  // 〉 -> ﹀
+    {0x2026, 0xFE19},  // … -> ︙
+    {0x2014, 0xFE31},  // — -> ︱
+    {0x007C, 0xFE33},  // | -> ︳
+    {0xFF5C, 0xFE33},  // ｜ -> ︳
+    {0x2016, 0xFE34},  // ‖ -> ︴
+    {0x005B, 0xFE47},  // [ -> ﹇
+    {0xFF3B, 0xFE47},  // ［ -> ﹇
+    {0x005D, 0xFE48},  // ] -> ﹈
+    {0xFF3D, 0xFE48},  // ］ -> ﹈
+};
+
+uint32_t findVerticalCodepoint(const uint32_t cp) {
+  for (const auto& entry : kVerticalGlyphMap) {
+    if (entry.horizontal == cp) {
+      return entry.vertical;
+    }
+  }
+  return 0;
+}
+
+uint32_t findHorizontalCodepointForVertical(const uint32_t cp) {
+  for (const auto& entry : kVerticalGlyphMap) {
+    if (entry.vertical == cp) {
+      return entry.horizontal;
+    }
+  }
+  return 0;
+}
+
+uint32_t fallbackVerticalSourceCodepoint(const uint32_t cp) {
+  if (findVerticalCodepoint(cp) != 0) {
+    return cp;
+  }
+  return findHorizontalCodepointForVertical(cp);
+}
+
+uint32_t mapVerticalCodepointIfAvailable(const EpdFontFamily& font, const uint32_t cp,
+                                         const EpdFontFamily::Style style) {
+  const uint32_t verticalCp = findVerticalCodepoint(cp);
+  if (verticalCp != 0 && font.getGlyph(verticalCp, style)) {
+    return verticalCp;
+  }
+  return cp;
+}
+
+bool shouldCenterFallbackVerticalPunctuation(const uint32_t cp) {
+  switch (cp) {
+    case 0x0021:  // !
+    case 0x002C:  // ,
+    case 0x002E:  // .
+    case 0x003A:  // :
+    case 0x003B:  // ;
+    case 0x003F:  // ?
+    case 0x3001:  // 、
+    case 0x3002:  // 。
+    case 0xFF01:  // ！
+    case 0xFF0C:  // ，
+    case 0xFF1A:  // ：
+    case 0xFF1B:  // ；
+    case 0xFF1F:  // ？
+      return true;
+    default:
+      return false;
+  }
+}
+
+const EpdGlyph* getRenderableGlyph(const EpdFontFamily& font, const uint32_t cp, const EpdFontFamily::Style style) {
+  const EpdGlyph* glyph = font.getGlyph(cp, style);
+  if (!glyph) {
+    glyph = font.getGlyph(REPLACEMENT_GLYPH, style);
+  }
+  return glyph;
+}
+
+void drawThickLine(const GfxRenderer& renderer, const int x1, const int y1, const int x2, const int y2,
+                   const bool black) {
+  if (x1 == x2) {
+    const int top = std::min(y1, y2);
+    const int height = std::abs(y2 - y1) + 1;
+    renderer.fillRect(x1 - 1, top, 2, height, black);
+    return;
+  }
+  if (y1 == y2) {
+    const int left = std::min(x1, x2);
+    const int width = std::abs(x2 - x1) + 1;
+    renderer.fillRect(left, y1 - 1, width, 2, black);
+    return;
+  }
+  renderer.drawLine(x1, y1, x2, y2, 2, black);
+}
+
+void drawDiagonalLine(const GfxRenderer& renderer, int x0, int y0, const int x1, const int y1, const bool black) {
+  const int dx = std::abs(x1 - x0);
+  const int sx = x0 < x1 ? 1 : -1;
+  const int dy = -std::abs(y1 - y0);
+  const int sy = y0 < y1 ? 1 : -1;
+  int err = dx + dy;
+
+  while (true) {
+    renderer.fillRect(x0, y0, 2, 2, black);
+    if (x0 == x1 && y0 == y1) {
+      break;
+    }
+    const int e2 = 2 * err;
+    if (e2 >= dy) {
+      err += dy;
+      x0 += sx;
+    }
+    if (e2 <= dx) {
+      err += dx;
+      y0 += sy;
+    }
+  }
+}
+
+bool drawFallbackVerticalForm(const GfxRenderer& renderer, const uint32_t cp, const int x, const int y,
+                              const int cellWidth, const int lineHeight, const bool black) {
+  if (cellWidth <= 0 || lineHeight <= 0) {
+    return false;
+  }
+
+  const int markSize = std::max(6, std::min(cellWidth, lineHeight) * 2 / 3);
+  const int x0 = x + (cellWidth - markSize) / 2;
+  const int x1 = x0 + markSize - 1;
+  const int y0 = y + std::max(1, (lineHeight - markSize) / 2);
+  const int y1 = y0 + markSize - 1;
+  const int cx = x + cellWidth / 2;
+  const int cy = y + lineHeight / 2;
+
+  switch (cp) {
+    case 0x2018:  // ‘ -> ﹁
+    case 0x201C:  // “ -> ﹁
+    case 0x300C:  // 「 -> ﹁
+      drawThickLine(renderer, x0, y0, x1, y0, black);
+      drawThickLine(renderer, x1, y0, x1, y1, black);
+      return true;
+    case 0x2019:  // ’ -> ﹂
+    case 0x201D:  // ” -> ﹂
+    case 0x300D:  // 」 -> ﹂
+      drawThickLine(renderer, x0, y1, x1, y1, black);
+      drawThickLine(renderer, x0, y0, x0, y1, black);
+      return true;
+    case 0x300E:  // 『 -> ﹃
+      drawThickLine(renderer, x0, y0, x1, y0, black);
+      drawThickLine(renderer, x1, y0, x1, y1, black);
+      drawThickLine(renderer, x0 + 3, y0 + 3, x1 - 3, y0 + 3, black);
+      drawThickLine(renderer, x1 - 3, y0 + 3, x1 - 3, y1 - 3, black);
+      return true;
+    case 0x300F:  // 』 -> ﹄
+      drawThickLine(renderer, x0, y1, x1, y1, black);
+      drawThickLine(renderer, x0, y0, x0, y1, black);
+      drawThickLine(renderer, x0 + 3, y1 - 3, x1 - 3, y1 - 3, black);
+      drawThickLine(renderer, x0 + 3, y0 + 3, x0 + 3, y1 - 3, black);
+      return true;
+    case 0x0028:  // ( -> ︵
+    case 0xFF08:  // （ -> ︵
+      drawThickLine(renderer, x0 + 2, y0, x1 - 2, y0, black);
+      drawThickLine(renderer, x0, y0 + 2, x0, y0 + markSize / 2, black);
+      drawThickLine(renderer, x1, y0 + 2, x1, y0 + markSize / 2, black);
+      return true;
+    case 0x0029:  // ) -> ︶
+    case 0xFF09:  // ） -> ︶
+      drawThickLine(renderer, x0 + 2, y1, x1 - 2, y1, black);
+      drawThickLine(renderer, x0, y1 - markSize / 2, x0, y1 - 2, black);
+      drawThickLine(renderer, x1, y1 - markSize / 2, x1, y1 - 2, black);
+      return true;
+    case 0x007B:  // { -> ︷
+    case 0xFF5B:  // ｛ -> ︷
+    case 0x3014:  // 〔 -> ︹
+    case 0x3010:  // 【 -> ︻
+    case 0x005B:  // [ -> ﹇
+    case 0xFF3B:  // ［ -> ﹇
+      drawThickLine(renderer, x0, y0, x1, y0, black);
+      drawThickLine(renderer, x0, y0, x0, y1, black);
+      drawThickLine(renderer, x1, y0, x1, y1, black);
+      return true;
+    case 0x007D:  // } -> ︸
+    case 0xFF5D:  // ｝ -> ︸
+    case 0x3015:  // 〕 -> ︺
+    case 0x3011:  // 】 -> ︼
+    case 0x005D:  // ] -> ﹈
+    case 0xFF3D:  // ］ -> ﹈
+      drawThickLine(renderer, x0, y1, x1, y1, black);
+      drawThickLine(renderer, x0, y0, x0, y1, black);
+      drawThickLine(renderer, x1, y0, x1, y1, black);
+      return true;
+    case 0x3008:  // 〈 -> ︿
+      drawDiagonalLine(renderer, x0, y1, cx, y0, black);
+      drawDiagonalLine(renderer, cx, y0, x1, y1, black);
+      return true;
+    case 0x3009:  // 〉 -> ﹀
+      drawDiagonalLine(renderer, x0, y0, cx, y1, black);
+      drawDiagonalLine(renderer, cx, y1, x1, y0, black);
+      return true;
+    case 0x300A:  // 《 -> ︽
+      drawDiagonalLine(renderer, x0, y1, cx - 2, y0, black);
+      drawDiagonalLine(renderer, cx - 2, y0, x1 - 4, y1, black);
+      drawDiagonalLine(renderer, x0 + 4, y1, cx + 2, y0, black);
+      drawDiagonalLine(renderer, cx + 2, y0, x1, y1, black);
+      return true;
+    case 0x300B:  // 》 -> ︾
+      drawDiagonalLine(renderer, x0, y0, cx - 2, y1, black);
+      drawDiagonalLine(renderer, cx - 2, y1, x1 - 4, y0, black);
+      drawDiagonalLine(renderer, x0 + 4, y0, cx + 2, y1, black);
+      drawDiagonalLine(renderer, cx + 2, y1, x1, y0, black);
+      return true;
+    case 0x2026:  // … -> ︙
+      renderer.fillRect(cx - 1, cy - markSize / 3 - 1, 3, 3, black);
+      renderer.fillRect(cx - 1, cy - 1, 3, 3, black);
+      renderer.fillRect(cx - 1, cy + markSize / 3 - 1, 3, 3, black);
+      return true;
+    case 0x2014:  // — -> ︱
+      drawThickLine(renderer, cx, y0, cx, y1, black);
+      return true;
+    case 0x007C:  // | -> ︳
+    case 0xFF5C:  // ｜ -> ︳
+      drawThickLine(renderer, cx, y0, cx, y1, black);
+      return true;
+    case 0x2016:  // ‖ -> ︴
+      drawThickLine(renderer, cx - 3, y0, cx - 3, y1, black);
+      drawThickLine(renderer, cx + 3, y0, cx + 3, y1, black);
+      return true;
+    default:
+      return false;
+  }
+}
+}  // namespace
 
 void GfxRenderer::begin() {
   frameBuffer = display.getFrameBuffer();
@@ -127,6 +404,172 @@ void GfxRenderer::drawText(const int fontId, const int x, const int y, const cha
   uint32_t cp;
   while ((cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&text)))) {
     renderChar(font, cp, &xpos, &yPos, black, style);
+  }
+}
+
+bool GfxRenderer::getTextPixelBoundsY(const int fontId, const char* text, const int y, int* top, int* bottom,
+                                      const EpdFontFamily::Style style) const {
+  if (!top || !bottom || text == nullptr || *text == '\0') {
+    return false;
+  }
+  if (fontMap.count(fontId) == 0) {
+    Serial.printf("[%lu] [GFX] Font %d not found\n", millis(), fontId);
+    return false;
+  }
+
+  const auto font = fontMap.at(fontId);
+  const int baseline = y + getFontAscenderSize(fontId);
+  int minY = 32767;
+  int maxY = -32768;
+  bool found = false;
+
+  uint32_t cp;
+  while ((cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&text)))) {
+    const EpdGlyph* glyph = font.getGlyph(cp, style);
+    if (!glyph) {
+      glyph = font.getGlyph(REPLACEMENT_GLYPH, style);
+    }
+    if (!glyph || glyph->height == 0) {
+      continue;
+    }
+    const int glyphTop = baseline - glyph->top;
+    const int glyphBottom = glyphTop + glyph->height - 1;
+    minY = std::min(minY, glyphTop);
+    maxY = std::max(maxY, glyphBottom);
+    found = true;
+  }
+
+  if (!found) {
+    return false;
+  }
+  *top = minY;
+  *bottom = maxY;
+  return true;
+}
+
+int GfxRenderer::getVerticalTextCellHeight(const int fontId) const {
+  static constexpr const char* samples[] = {"我", "國", "字", "高", "香", "菜", "書", "測", "一", "二", "三"};
+  int minY = 32767;
+  int maxY = -32768;
+  bool found = false;
+
+  for (const char* sample : samples) {
+    int top = 0;
+    int bottom = 0;
+    if (getTextPixelBoundsY(fontId, sample, 0, &top, &bottom)) {
+      minY = std::min(minY, top);
+      maxY = std::max(maxY, bottom);
+      found = true;
+    }
+  }
+
+  if (!found) {
+    return getLineHeight(fontId);
+  }
+  return std::max(1, maxY - minY + 1);
+}
+
+int GfxRenderer::getVerticalTextTopInset(const int fontId) const {
+  static constexpr const char* samples[] = {"我", "國", "字", "高", "香", "菜", "書", "測", "一", "二", "三"};
+  int minY = 32767;
+  bool found = false;
+
+  for (const char* sample : samples) {
+    int top = 0;
+    int bottom = 0;
+    if (getTextPixelBoundsY(fontId, sample, 0, &top, &bottom)) {
+      minY = std::min(minY, top);
+      found = true;
+    }
+  }
+
+  return found ? std::max(0, minY) : 0;
+}
+
+int GfxRenderer::getVerticalTextWidth(const int fontId, const char* text, const EpdFontFamily::Style style) const {
+  if (fontMap.count(fontId) == 0) {
+    Serial.printf("[%lu] [GFX] Font %d not found\n", millis(), fontId);
+    return 0;
+  }
+  if (text == nullptr || *text == '\0') {
+    return 0;
+  }
+
+  const auto font = fontMap.at(fontId);
+  int width = 0;
+  uint32_t cp;
+  while ((cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&text)))) {
+    const uint32_t mappedCp = mapVerticalCodepointIfAvailable(font, cp, style);
+    const EpdGlyph* glyph = font.getGlyph(mappedCp, style);
+    if (!glyph && fallbackVerticalSourceCodepoint(cp) != 0) {
+      width += getLineHeight(fontId);
+      continue;
+    }
+    glyph = getRenderableGlyph(font, mappedCp, style);
+    if (!glyph) {
+      continue;
+    }
+    width += glyph->advanceX;
+  }
+  return width;
+}
+
+void GfxRenderer::drawVerticalText(const int fontId, const int x, const int y, const char* text, const bool black,
+                                   const EpdFontFamily::Style style) const {
+  // stage15.8 修 BUG：SAM 原版只逐字畫但用 xpos += advanceX（往 X 推進、實際是橫排）
+  //                  真正直排：每個字畫完往 Y 推進、X 留在欄位上
+  //                  欄寬 = lineHeight（直排「行寬」= 字級），每字佔一個 charBoxH 高
+  if (text == nullptr || *text == '\0') {
+    return;
+  }
+  if (fontMap.count(fontId) == 0) {
+    Serial.printf("[%lu] [GFX] Font %d not found\n", millis(), fontId);
+    return;
+  }
+  const auto font = fontMap.at(fontId);
+
+  const int lineHeight = getLineHeight(fontId);  // 字級高度（= 直排每字佔的格子高）
+  const int colWidth = lineHeight;                // 直排欄寬 = 字格寬（粗略以方塊字為主）
+  const int ascender = getFontAscenderSize(fontId);
+
+  int cellTop = y;  // 目前要畫的字格頂部 Y
+  uint32_t cp;
+  while ((cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&text)))) {
+    const uint32_t mappedCp = mapVerticalCodepointIfAvailable(font, cp, style);
+    const uint32_t fallbackCp = fallbackVerticalSourceCodepoint(cp);
+    const EpdGlyph* glyph = font.getGlyph(mappedCp, style);
+
+    // stage27: 長標點強制 fallback —
+    //   刪節號 …、破折號 —/―、雙縱線 ‖、垂直線 | 在直排時必須轉成直立版本
+    //   如果字型沒對應的 FE19/FE31/FE33/FE34，就算字型有橫向版也不能直接畫（會橫躺）
+    //   改用線條 fallback 畫成直立的三點 / 直線
+    const bool isLongVerticalPunct =
+        (cp == 0x2026 || cp == 0x2014 || cp == 0x2015 || cp == 0x2016 || cp == 0x007C || cp == 0xFF5C);
+    const bool needForcedFallback = glyph && isLongVerticalPunct && (mappedCp == cp);
+
+    // 直排標點 fallback：字型缺直排碼點、原始標點，或 EPUB 已給 FE** 直排碼點時都能畫。
+    if ((!glyph || needForcedFallback) && fallbackCp != 0 &&
+        drawFallbackVerticalForm(*this, fallbackCp, x, cellTop, colWidth, lineHeight, black)) {
+      cellTop += lineHeight;
+      continue;
+    }
+    glyph = getRenderableGlyph(font, mappedCp, style);
+
+    // 一般字：在欄寬內水平置中、垂直靠 ascender 對齊
+    if (glyph) {
+      const int glyphCellX = x + std::max(0, (colWidth - static_cast<int>(glyph->advanceX)) / 2);
+      // 標點符號：直排格子內再垂直置中（句號逗號這種小符號才不會貼在上邊緣）
+      int glyphCellTop;
+      if (shouldCenterFallbackVerticalPunctuation(cp) && mappedCp == cp) {
+        glyphCellTop = cellTop + std::max(0, (lineHeight - static_cast<int>(glyph->height)) / 2);
+      } else {
+        glyphCellTop = cellTop;
+      }
+      int gx = glyphCellX;
+      int gy = glyphCellTop + ascender;  // renderChar 用 baseline、所以加 ascender
+      renderChar(font, mappedCp, &gx, &gy, black, style);
+    }
+    cellTop += lineHeight;
   }
 }
 
@@ -673,6 +1116,14 @@ void GfxRenderer::displayBuffer(const HalDisplay::RefreshMode refreshMode) const
   display.displayBuffer(refreshMode, fadingFix);
 }
 
+void GfxRenderer::displayBufferClean() const {
+  // stage27.1: 直接雙刷不 backup buffer，避免 OOM
+  //   原本配 48KB std::vector backup 在 framebuffer 髒掉前先存，自訂字型載入後 RAM 緊張會崩
+  //   現在直接同樣內容刷兩次，犧牲一點清屏效果換穩定
+  display.displayBuffer(HalDisplay::FAST_REFRESH, false);
+  display.displayBuffer(HalDisplay::FAST_REFRESH, fadingFix);
+}
+
 std::string GfxRenderer::truncatedText(const int fontId, const char* text, const int maxWidth,
                                        const EpdFontFamily::Style style) const {
   if (!text || maxWidth <= 0) return "";
@@ -1163,4 +1614,102 @@ void GfxRenderer::drawPngFromTxtpng(const char* txtpng_file_path) const {
     // 7. 关闭文件，释放资源
     txtpng_file.close();
     Serial.printf("[%lu] [GFX] Png draw completed (mode: %d)\n", millis(), renderMode);
+}
+
+// 圓角矩形外角遮罩（RoundedRaff theme 用）— 從 Carousel 移植
+// 把矩形的 4 個外角（圓弧外的部分）填成 color，讓書封呈現圓角
+void GfxRenderer::maskRoundedRectOutsideCorners(const int x, const int y, const int width, const int height,
+                                                const int radius, const Color color) const {
+  if (radius <= 0 || color == Color::Clear) {
+    return;
+  }
+
+  const int rr = radius - 1;
+  const int rr2 = rr * rr;
+  for (int dy = 0; dy < radius; dy++) {
+    for (int dx = 0; dx < radius; dx++) {
+      const int tx = rr - dx;
+      const int ty = rr - dy;
+      if (tx * tx + ty * ty > rr2) {
+        if (color == Color::White || color == Color::Black) {
+          bool state = color == Color::Black;
+          drawPixel(x + dx, y + dy, state);
+          drawPixel(x + width - 1 - dx, y + dy, state);
+          drawPixel(x + dx, y + height - 1 - dy, state);
+          drawPixel(x + width - 1 - dx, y + height - 1 - dy, state);
+        } else if (color == Color::LightGray) {
+          drawPixelDither<Color::LightGray>(x + dx, y + dy);
+          drawPixelDither<Color::LightGray>(x + width - 1 - dx, y + dy);
+          drawPixelDither<Color::LightGray>(x + dx, y + height - 1 - dy);
+          drawPixelDither<Color::LightGray>(x + width - 1 - dx, y + height - 1 - dy);
+        } else if (color == Color::DarkGray) {
+          drawPixelDither<Color::DarkGray>(x + dx, y + dy);
+          drawPixelDither<Color::DarkGray>(x + width - 1 - dx, y + dy);
+          drawPixelDither<Color::DarkGray>(x + dx, y + height - 1 - dy);
+          drawPixelDither<Color::DarkGray>(x + width - 1 - dx, y + height - 1 - dy);
+        }
+      }
+    }
+  }
+}
+
+// 透視梯形繪圖（Flow theme 輪播用）— 從 Carousel 移植，砍掉 fontCacheManager_ 檢查
+void GfxRenderer::drawPerspectiveBitmap(const Bitmap& bitmap, const int x, const int y, const int w, const int hL,
+                                        const int hR) const {
+  if (w <= 0 || hL <= 0 || hR <= 0) return;
+
+  const int srcW = bitmap.getWidth();
+  const int srcH = bitmap.getHeight();
+  if (srcW <= 0 || srcH <= 0) return;
+
+  const int hMax = (hL > hR) ? hL : hR;
+  const int screenW = getScreenWidth();
+  const int screenH = getScreenHeight();
+  const bool topDown = bitmap.isTopDown();
+
+  // Same row buffer pattern as drawBitmap (2 bits per pixel quantized).
+  const int outputRowSize = (srcW + 3) / 4;
+  auto* outputRow = static_cast<uint8_t*>(malloc(outputRowSize));
+  auto* rowBytes = static_cast<uint8_t*>(malloc(bitmap.getRowBytes()));
+  if (!outputRow || !rowBytes) {
+    Serial.printf("[%lu] [GFX] !! Failed to allocate perspective row buffers\n", millis());
+    free(outputRow);
+    free(rowBytes);
+    return;
+  }
+
+  for (int srcY = 0; srcY < srcH; srcY++) {
+    if (bitmap.readNextRow(outputRow, rowBytes) != BmpReaderError::Ok) {
+      Serial.printf("[%lu] [GFX] Failed to read row %d from bitmap (perspective)\n", millis(), srcY);
+      free(outputRow);
+      free(rowBytes);
+      return;
+    }
+    const int srcRowIndex = topDown ? srcY : (srcH - 1 - srcY);
+
+    for (int dx = 0; dx < w; dx++) {
+      const int colH = (w == 1) ? hL : (hL + (hR - hL) * dx / (w - 1));
+      if (colH <= 0) continue;
+      const int colTop = (hMax - colH) / 2;
+      const int dy = (srcRowIndex * colH) / srcH;
+      const int screenX = x + dx;
+      const int screenY = y + colTop + dy;
+      if (screenX < 0 || screenX >= screenW) continue;
+      if (screenY < 0 || screenY >= screenH) continue;
+
+      const int srcX = (dx * srcW) / w;
+      const uint8_t val = (outputRow[srcX / 4] >> (6 - ((srcX * 2) % 8))) & 0x3;
+
+      if (renderMode == BW && val < 3) {
+        drawPixel(screenX, screenY);
+      } else if (renderMode == GRAYSCALE_MSB && (val == 1 || val == 2)) {
+        drawPixel(screenX, screenY, false);
+      } else if (renderMode == GRAYSCALE_LSB && val == 1) {
+        drawPixel(screenX, screenY, false);
+      }
+    }
+  }
+
+  free(outputRow);
+  free(rowBytes);
 }

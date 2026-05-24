@@ -93,7 +93,7 @@ static SettingInfo Value(const char* name, uint8_t CrossPointSettings::* ptr,
     s.type = SettingType::VALUE; 
     s.valuePtr = ptr;            
     
-    // 2. 数值范围属性（适配0-40、步长5）
+    // 2. 數值範圍屬性（適配0-40、步長5）
     s.valueRange.min = minVal;
     s.valueRange.max = maxVal;
     s.valueRange.step = stepVal;
@@ -134,9 +134,30 @@ static SettingInfo Value(const char* name, uint8_t CrossPointSettings::* ptr,
 };
 
 class SettingsActivity final : public ActivityWithSubactivity {
+  struct ReaderSettingsSnapshot {
+    uint8_t fontFamily = 0;
+    uint8_t fontSize = 0;
+    uint8_t customFontSize = 0;
+    char customFontFamily[64] = "";
+    uint8_t lineSpacing = 0;
+    uint8_t firstlineintented = 0;
+    uint8_t wordSpacing = 0;
+    uint8_t screenMarginTop = 0;
+    uint8_t screenMarginBottom = 0;
+    uint8_t screenMarginLeft = 0;
+    uint8_t screenMarginRight = 0;
+    uint8_t extraline = 0;
+    uint8_t paragraphAlignment = 0;
+    uint8_t textLayout = 0;
+    uint8_t orientation = 0;
+    uint8_t extraParagraphSpacing = 0;
+    uint8_t textAntiAliasing = 0;
+  };
+
   TaskHandle_t displayTaskHandle = nullptr;
   SemaphoreHandle_t renderingMutex = nullptr;
   bool updateRequired = false;
+  bool ignoreInputUntilClear = false;
   int selectedCategoryIndex = 0;  // Currently selected category
   int selectedSettingIndex = 0;
   int settingsCount = 0;
@@ -147,6 +168,7 @@ class SettingsActivity final : public ActivityWithSubactivity {
   std::vector<SettingInfo> controlsSettings;
   std::vector<SettingInfo> systemSettings;
   const std::vector<SettingInfo>* currentSettings = nullptr;
+  ReaderSettingsSnapshot readerSettingsOnEnter;
 
   const std::function<void()> onGoHome;
 
@@ -157,7 +179,11 @@ class SettingsActivity final : public ActivityWithSubactivity {
   [[noreturn]] void displayTaskLoop();
   void render() const;
   void enterCategory(int categoryIndex);
-  void toggleCurrentSetting();
+  void adjustCurrentSetting(int direction);
+  bool isInputClear() const;
+  ReaderSettingsSnapshot captureReaderSettings() const;
+  bool readerSettingsChanged() const;
+  void clearTxtCachesIfReaderSettingsChanged();
 
  public:
   explicit SettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,

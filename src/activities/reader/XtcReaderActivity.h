@@ -50,6 +50,7 @@ class XtcReaderActivity final : public ActivityWithSubactivity {
         xtc(std::move(xtc)),
         onGoBack(onGoBack),
         onGoHome(onGoHome) {}
+  bool isReaderActivity() const override { return true; }
   void onEnter() override;
   void onExit() override;
   void loop() override;

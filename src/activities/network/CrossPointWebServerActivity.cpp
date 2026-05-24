@@ -8,10 +8,13 @@
 
 #include <cstddef>
 
+#include <BluetoothHIDManager.h>
 #include "MappedInputManager.h"
 #include "NetworkModeSelectionActivity.h"
 #include "WifiSelectionActivity.h"
+#ifndef DISABLE_CALIBRE
 #include "activities/network/CalibreConnectActivity.h"
+#endif
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "network/NetworkConstants.h"
@@ -23,6 +26,15 @@ using namespace NetworkConstants;
 namespace {
 // DNS server for captive portal (redirects all DNS queries to our IP)
 DNSServer* dnsServer = nullptr;
+
+void disableBluetoothBeforeWifi(const char* tag) {
+  auto& btMgr = BluetoothHIDManager::getInstance();
+  if (btMgr.isEnabled()) {
+    Serial.printf("[%lu] [%s] Disabling Bluetooth before WiFi start\n", millis(), tag);
+    btMgr.disable();
+    delay(100);
+  }
+}
 }  // namespace
 
 void CrossPointWebServerActivity::taskTrampoline(void* param) {
@@ -47,7 +59,7 @@ void CrossPointWebServerActivity::onEnter() {
   updateRequired = true;
 
   xTaskCreate(&CrossPointWebServerActivity::taskTrampoline, "WebServerActivityTask",
-              2048,               // Stack size
+              8192,               // Stack size
               this,               // Parameters
               1,                  // Priority
               &displayTaskHandle  // Task handle
@@ -124,9 +136,12 @@ void CrossPointWebServerActivity::onExit() {
 
 void CrossPointWebServerActivity::onNetworkModeSelected(const NetworkMode mode) {
   const char* modeName = "Join Network";
+#ifndef DISABLE_CALIBRE
   if (mode == NetworkMode::CONNECT_CALIBRE) {
     modeName = "Connect to Calibre";
-  } else if (mode == NetworkMode::CREATE_HOTSPOT) {
+  } else
+#endif
+  if (mode == NetworkMode::CREATE_HOTSPOT) {
     modeName = "Create Hotspot";
   }
   Serial.printf("[%lu] [WEBACT] Network mode selected: %s\n", millis(), modeName);
@@ -137,6 +152,7 @@ void CrossPointWebServerActivity::onNetworkModeSelected(const NetworkMode mode) 
   // Exit mode selection subactivity
   exitActivity();
 
+#ifndef DISABLE_CALIBRE
   if (mode == NetworkMode::CONNECT_CALIBRE) {
     exitActivity();
     enterNewActivity(new CalibreConnectActivity(renderer, mappedInput, [this] {
@@ -148,6 +164,7 @@ void CrossPointWebServerActivity::onNetworkModeSelected(const NetworkMode mode) 
     }));
     return;
   }
+#endif
 
   if (mode == NetworkMode::JOIN_NETWORK) {
     // STA mode - launch WiFi selection
@@ -197,6 +214,8 @@ void CrossPointWebServerActivity::onWifiSelectionComplete(const bool connected) 
 void CrossPointWebServerActivity::startAccessPoint() {
   Serial.printf("[%lu] [WEBACT] Starting Access Point mode...\n", millis());
   Serial.printf("[%lu] [WEBACT] [MEM] Free heap before AP start: %d bytes\n", millis(), ESP.getFreeHeap());
+
+  disableBluetoothBeforeWifi("WEBACT");
 
   // Configure and start the AP
   WiFi.mode(WIFI_AP);
@@ -462,6 +481,42 @@ void CrossPointWebServerActivity::renderServerRunning() const {
     const auto pageWidth = renderer.getScreenWidth();
     QRCodeHelper::drawQRCode(renderer, (pageWidth - QRCodeHelper::qrSize()) / 2, startY + LINE_SPACING * 6, webInfo);
     renderer.drawCenteredText(SMALL_FONT_ID, startY + LINE_SPACING * 5, "or scan QR code with your phone:");
+  }
+
+  // stage15.6: WiFi 傳檔進度條 — 看 webServer 是否有上傳中或剛完成
+  if (webServer && webServer->isRunning()) {
+    const auto status = webServer->getWsUploadStatus();
+    const int pageWidth = renderer.getScreenWidth();
+    const int pageHeight = renderer.getScreenHeight();
+    const int barY = pageHeight - 110;  // 按鈕區上方
+    if (status.inProgress && status.total > 0) {
+      // 顯示「正在傳：filename」+ 進度條 + KB/total KB
+      std::string msg = "傳檔中：" + status.filename;
+      if (msg.length() > 40) msg.replace(37, msg.length() - 37, "...");
+      renderer.drawCenteredText(SMALL_FONT_ID, barY, msg.c_str(), true, EpdFontFamily::BOLD);
+      // 進度條
+      const int barW = pageWidth - 80;
+      const int barX = 40;
+      const int barH = 12;
+      const int fillW = static_cast<int>(static_cast<int64_t>(barW) * status.received / status.total);
+      renderer.drawRect(barX, barY + 20, barW, barH);
+      if (fillW > 2) renderer.fillRect(barX + 1, barY + 21, fillW - 2, barH - 2);
+      // 百分比 + KB
+      char info[64];
+      snprintf(info, sizeof(info), "%zu / %zu KB (%d%%)",
+               status.received / 1024, status.total / 1024,
+               static_cast<int>(100LL * status.received / status.total));
+      renderer.drawCenteredText(SMALL_FONT_ID, barY + 20 + barH + 6, info);
+    } else if (!status.lastCompleteName.empty() && status.lastCompleteAt > 0 &&
+               (millis() - status.lastCompleteAt) < 10000) {
+      // 10 秒內顯示「剛完成」
+      std::string msg = "已完成：" + status.lastCompleteName;
+      if (msg.length() > 40) msg.replace(37, msg.length() - 37, "...");
+      renderer.drawCenteredText(SMALL_FONT_ID, barY + 10, msg.c_str(), true, EpdFontFamily::BOLD);
+      char info[48];
+      snprintf(info, sizeof(info), "(%zu KB)", status.lastCompleteSize / 1024);
+      renderer.drawCenteredText(SMALL_FONT_ID, barY + 30, info);
+    }
   }
 
   const auto labels = mappedInput.mapLabels("« Exit", "", "", "");

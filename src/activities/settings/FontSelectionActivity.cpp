@@ -77,6 +77,8 @@ void FontSelectionActivity::saveAndExit() {
     SETTINGS.customFontFamily[sizeof(SETTINGS.customFontFamily) - 1] = '\0';
     SETTINGS.fontFamily = CrossPointSettings::FONT_CUSTOM;
     SETTINGS.saveToFile();
+    // 立即將選好的字體注入 renderer，讓開書時能用到（不需等 SettingsActivity Back 才載入）
+    EpdFontLoader::loadFontsFromSd(renderer);
   }
   onClose();
 }
@@ -95,17 +97,16 @@ void FontSelectionActivity::render() const {
     return;
   }
 
-  for (int i = 0; i < (int)fontFamilies.size(); i++) {
+  for (int i = 0; i < itemsPerPage; i++) {
     int idx = scrollOffset + i;
+    if (idx >= (int)fontFamilies.size()) break;  // OOB guard
 
     // Draw selection box
     if (idx == selectedIndex) {
-      Serial.printf("[FSA] Drawing selected: %s at %d\n", fontFamilies[idx].c_str(), y);
       renderer.fillRect(0, y - 2, 480, 30);
-      renderer.drawText(UI_10_FONT_ID, 20, y, fontFamilies[idx].c_str(), false);  // false = white (on black box)
+      renderer.drawText(UI_10_FONT_ID, 20, y, fontFamilies[idx].c_str(), false);
     } else {
-      Serial.printf("[FSA] Drawing: %s at %d\n", fontFamilies[idx].c_str(), y);
-      renderer.drawText(UI_10_FONT_ID, 20, y, fontFamilies[idx].c_str(), true);  // true = black (on white bg)
+      renderer.drawText(UI_10_FONT_ID, 20, y, fontFamilies[idx].c_str(), true);
     }
 
     // Mark current active font
@@ -117,7 +118,7 @@ void FontSelectionActivity::render() const {
   }
 
   // Draw help text
-  const auto labels = mappedInput.mapLabels("« 返回", "选择", "", "");
+  const auto labels = mappedInput.mapLabels("« 返回", "選擇", "", "");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   renderer.displayBuffer();

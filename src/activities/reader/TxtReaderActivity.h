@@ -38,6 +38,7 @@ class TxtReaderActivity final : public ActivityWithSubactivity {
   [[noreturn]] void displayTaskLoop();
   void renderScreen();
   void renderPage();
+  void saveSleepExcerptFromCurrentLines() const;
   void renderStatusBar(int orientedMarginRight, int orientedMarginBottom, int orientedMarginTop, int orientedMarginLeft) const;
 
   bool loadPageAtOffset(size_t offset,size_t endoffset, std::vector<std::string>& outLines, size_t& nextOffset);
@@ -65,6 +66,7 @@ class TxtReaderActivity final : public ActivityWithSubactivity {
         txt(std::move(txt)),
         onGoBack(onGoBack),
         onGoHome(onGoHome) {}
+  bool isReaderActivity() const override { return true; }
   void onEnter() override;
   void onExit() override;
   void loop() override;

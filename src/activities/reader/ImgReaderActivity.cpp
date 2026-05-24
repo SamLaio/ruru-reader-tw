@@ -12,6 +12,7 @@
 #include "fontIds.h"
 
 #include "CrossPointSettings.h"
+#include "LanguageMapper.h"
 #include "components/UITheme.h"
 #include "MappedInputManager.h"
 #include "util/StringUtils.h"
@@ -181,7 +182,7 @@ void ImgReaderActivity::renderImage() {
     renderer.displayBuffer(HalDisplay::FAST_REFRESH);
   } else {
     renderer.clearScreen();
-    renderer.drawCenteredText(UI_12_FONT_ID, 300, "Image load failed", true, EpdFontFamily::BOLD);
+    renderer.drawCenteredText(UI_12_FONT_ID, 300, getChineseName("Image load failed"), true, EpdFontFamily::BOLD);
     renderer.displayBuffer(HalDisplay::FAST_REFRESH);
   }
 }
@@ -189,20 +190,21 @@ void ImgReaderActivity::renderImage() {
 void ImgReaderActivity::renderMenuOverlay() const {
   renderer.fillRect(20, 250, renderer.getScreenWidth() - 40, 300, false);
   renderer.drawRect(20, 250, renderer.getScreenWidth() - 40, 300, true);
-  renderer.drawCenteredText(UI_12_FONT_ID, 275, "图片操作", true, EpdFontFamily::BOLD);
+  renderer.drawCenteredText(UI_12_FONT_ID, 275, getChineseName("Image actions"), true, EpdFontFamily::BOLD);
 
-  const char* item0 = (menuIndex == 0) ? "> 设为阅读背景" : "  设为阅读背景";
-  const char* item1 = (menuIndex == 1) ? "> 设为自定义睡眠屏" : "  设为自定义睡眠屏";
-  const char* item2 = (menuIndex == 2) ? "> 设为透明壁纸" : "  设为透明壁纸";
-  const char* item3 = (menuIndex == 3) ? "> 旋转180度" : "  旋转180度";
-  const char* item4 = (menuIndex == 4) ? "> 左右翻转" : "  左右翻转";
-  renderer.drawCenteredText(SMALL_FONT_ID, 325, item0);
-  renderer.drawCenteredText(SMALL_FONT_ID, 355, item1);
-  renderer.drawCenteredText(SMALL_FONT_ID, 385, item2);
-  renderer.drawCenteredText(SMALL_FONT_ID, 415, item3);
-  renderer.drawCenteredText(SMALL_FONT_ID, 445, item4);
+  const std::string item0 = std::string(menuIndex == 0 ? "> " : "  ") + getChineseName("Set reading background");
+  const std::string item1 = std::string(menuIndex == 1 ? "> " : "  ") + getChineseName("Set custom sleep screen");
+  const std::string item2 = std::string(menuIndex == 2 ? "> " : "  ") + getChineseName("Set transparent wallpaper");
+  const std::string item3 = std::string(menuIndex == 3 ? "> " : "  ") + getChineseName("Rotate 180");
+  const std::string item4 = std::string(menuIndex == 4 ? "> " : "  ") + getChineseName("Flip horizontal");
+  renderer.drawCenteredText(SMALL_FONT_ID, 325, item0.c_str());
+  renderer.drawCenteredText(SMALL_FONT_ID, 355, item1.c_str());
+  renderer.drawCenteredText(SMALL_FONT_ID, 385, item2.c_str());
+  renderer.drawCenteredText(SMALL_FONT_ID, 415, item3.c_str());
+  renderer.drawCenteredText(SMALL_FONT_ID, 445, item4.c_str());
 
-  const auto labels = mappedInput.mapLabels("返回", "应用", "上一项", "下一项");
+  const auto labels = mappedInput.mapLabels(getChineseName("Back"), getChineseName("Apply"), getChineseName("Previous item"),
+                                            getChineseName("Next item"));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   renderer.displayBuffer(HalDisplay::FAST_REFRESH);
 }
@@ -548,6 +550,10 @@ bool ImgReaderActivity::setAsTransparentWallpaper() {
   }
 
   const bool pxaSaved = saveTransparentOverlayPxaFromPng(imagePath, TRANSPARENT_BG_PXA);
+  if (pxaSaved) {
+    SETTINGS.sleepScreen = CrossPointSettings::SLEEP_SCREEN_MODE::MARSK2;
+    SETTINGS.saveToFile();
+  }
   return pxaSaved;
 }
 
@@ -558,25 +564,25 @@ void ImgReaderActivity::executeMenuAction() {
   switch (item) {
     case ActionMenuItem::SET_READING_BG:
       ok = setAsReadingBackground();
-      showOperationResult(ok ? "阅读背景设置完成" : "仅支持 PNG/JPG/BMP / 设置失败");
+      showOperationResult(ok ? getChineseName("Reading background saved") : getChineseName("Image background save failed"));
       break;
     case ActionMenuItem::SET_CUSTOM_SLEEP:
       ok = setAsCustomSleepScreen();
-      showOperationResult(ok ? "自定义睡眠屏幕保存成功" : "保存失败");
+      showOperationResult(ok ? getChineseName("Custom sleep saved") : getChineseName("Save failed"));
       break;
     case ActionMenuItem::SET_TRANSPARENT_WALLPAPER:
       ok = setAsTransparentWallpaper();
-      showOperationResult(ok ? "透明壁纸保存成功" : "仅支持 PNG / 保存失败");
+      showOperationResult(ok ? getChineseName("Transparent wallpaper saved") : getChineseName("PNG save failed"));
       break;
     case ActionMenuItem::ROTATE_180:
       rotate180Enabled = !rotate180Enabled;
       ok = true;
-      showOperationResult(ok ? "旋转成功" : "旋转失败");
+      showOperationResult(ok ? getChineseName("Rotate success") : getChineseName("Rotate failed"));
       break;
     case ActionMenuItem::FLIP_HORIZONTAL:
       flipHorizontalEnabled = !flipHorizontalEnabled;
       ok = true;
-      showOperationResult(ok ? "翻转成功" : "翻转失败");
+      showOperationResult(ok ? getChineseName("Flip success") : getChineseName("Flip failed"));
       break;
   }
 

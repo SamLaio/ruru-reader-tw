@@ -11,15 +11,119 @@
 #include "util/StringUtils.h"
 
 namespace {
-constexpr uint8_t RECENT_BOOKS_FILE_VERSION = 3;
+constexpr uint8_t RECENT_BOOKS_FILE_VERSION = 4;
 constexpr char RECENT_BOOKS_FILE[] = "/.crosspoint/recent.bin";
+constexpr char RECENT_BOOKS_TMP_FILE[] = "/.crosspoint/recent.tmp";
+constexpr char RECENT_BOOKS_BAK_FILE[] = "/.crosspoint/recent.bak";
 constexpr int MAX_RECENT_BOOKS = 10;
+
+template <typename T>
+bool readPodChecked(FsFile& file, T& value) {
+  return file.read(reinterpret_cast<uint8_t*>(&value), sizeof(T)) == sizeof(T);
+}
+
+bool readStringChecked(FsFile& file, std::string& s) {
+  uint32_t len = 0;
+  if (!readPodChecked(file, len)) {
+    return false;
+  }
+  if (len > 4096 || file.available() < len) {
+    return false;
+  }
+  s.resize(len);
+  if (len == 0) {
+    return true;
+  }
+  return file.read(reinterpret_cast<uint8_t*>(&s[0]), len) == static_cast<int>(len);
+}
+
+bool loadRecentBooksFromPath(const char* path, std::vector<RecentBook>& outBooks) {
+  FsFile inputFile;
+  if (!SdMan.openFileForRead("RBS", path, inputFile)) {
+    return false;
+  }
+
+  uint8_t version = 0;
+  if (!readPodChecked(inputFile, version)) {
+    inputFile.close();
+    return false;
+  }
+
+  if (version > RECENT_BOOKS_FILE_VERSION || version == 0) {
+    Serial.printf("[%lu] [RBS] Deserialization failed: Unknown version %u\n", millis(), version);
+    inputFile.close();
+    return false;
+  }
+
+  uint8_t count = 0;
+  if (!readPodChecked(inputFile, count) || count > MAX_RECENT_BOOKS) {
+    Serial.printf("[%lu] [RBS] Deserialization failed: invalid count %u\n", millis(), count);
+    inputFile.close();
+    return false;
+  }
+
+  std::vector<RecentBook> parsedBooks;
+  parsedBooks.reserve(count);
+
+  for (uint8_t i = 0; i < count; i++) {
+    std::string pathValue;
+    if (!readStringChecked(inputFile, pathValue) || pathValue.empty()) {
+      inputFile.close();
+      return false;
+    }
+
+    if (version == 1) {
+      RecentBook book = RECENT_BOOKS.getDataFromBook(pathValue);
+      parsedBooks.push_back(book);
+      continue;
+    }
+
+    std::string title;
+    std::string author;
+    if (!readStringChecked(inputFile, title) || !readStringChecked(inputFile, author)) {
+      inputFile.close();
+      return false;
+    }
+
+    if (version == 2) {
+      RecentBook book = RECENT_BOOKS.getDataFromBook(pathValue);
+      if (book.title.empty() && book.author.empty()) {
+        parsedBooks.push_back({pathValue, title, author, ""});
+      } else {
+        parsedBooks.push_back(book);
+      }
+      continue;
+    }
+
+    std::string coverBmpPath;
+    if (!readStringChecked(inputFile, coverBmpPath)) {
+      inputFile.close();
+      return false;
+    }
+    int16_t progressPercent = -1;
+    if (version >= 4) {
+      if (!readPodChecked(inputFile, progressPercent)) {
+        inputFile.close();
+        return false;
+      }
+    }
+    parsedBooks.push_back({pathValue, title, author, coverBmpPath, progressPercent});
+  }
+
+  inputFile.close();
+  outBooks = std::move(parsedBooks);
+  return true;
+}
 }  // namespace
 
 RecentBooksStore RecentBooksStore::instance;
 
 void RecentBooksStore::addBook(const std::string& path, const std::string& title, const std::string& author,
                                const std::string& coverBmpPath) {
+  if (recentBooks.empty()) {
+    loadFromFile();
+  }
+
   // Remove existing entry if present
   auto it =
       std::find_if(recentBooks.begin(), recentBooks.end(), [&](const RecentBook& book) { return book.path == path; });
@@ -51,12 +155,21 @@ void RecentBooksStore::updateBook(const std::string& path, const std::string& ti
   }
 }
 
+void RecentBooksStore::updateProgress(const std::string& path, int progressPercent) {
+  auto it =
+      std::find_if(recentBooks.begin(), recentBooks.end(), [&](const RecentBook& book) { return book.path == path; });
+  if (it != recentBooks.end()) {
+    it->progressPercent = progressPercent;
+    saveToFile();
+  }
+}
+
 bool RecentBooksStore::saveToFile() const {
   // Make sure the directory exists
   SdMan.mkdir("/.crosspoint");
 
   FsFile outputFile;
-  if (!SdMan.openFileForWrite("RBS", RECENT_BOOKS_FILE, outputFile)) {
+  if (!SdMan.openFileForWrite("RBS", RECENT_BOOKS_TMP_FILE, outputFile)) {
     return false;
   }
 
@@ -69,9 +182,32 @@ bool RecentBooksStore::saveToFile() const {
     serialization::writeString(outputFile, book.title);
     serialization::writeString(outputFile, book.author);
     serialization::writeString(outputFile, book.coverBmpPath);
+    const int16_t prog = static_cast<int16_t>(book.progressPercent);
+    serialization::writePod(outputFile, prog);
   }
 
+  outputFile.sync();
   outputFile.close();
+
+  if (SdMan.exists(RECENT_BOOKS_BAK_FILE)) {
+    SdMan.remove(RECENT_BOOKS_BAK_FILE);
+  }
+
+  if (SdMan.exists(RECENT_BOOKS_FILE) && !SdMan.rename(RECENT_BOOKS_FILE, RECENT_BOOKS_BAK_FILE)) {
+    Serial.printf("[%lu] [RBS] Failed to rotate recent books backup\n", millis());
+    SdMan.remove(RECENT_BOOKS_TMP_FILE);
+    return false;
+  }
+
+  if (!SdMan.rename(RECENT_BOOKS_TMP_FILE, RECENT_BOOKS_FILE)) {
+    Serial.printf("[%lu] [RBS] Failed to commit recent books file\n", millis());
+    if (SdMan.exists(RECENT_BOOKS_BAK_FILE)) {
+      SdMan.rename(RECENT_BOOKS_BAK_FILE, RECENT_BOOKS_FILE);
+    }
+    SdMan.remove(RECENT_BOOKS_TMP_FILE);
+    return false;
+  }
+
   Serial.printf("[%lu] [RBS] Recent books saved to file (%d entries)\n", millis(), count);
   return true;
 }
@@ -105,59 +241,16 @@ RecentBook RecentBooksStore::getDataFromBook(std::string path) const {
 }
 
 bool RecentBooksStore::loadFromFile() {
-  FsFile inputFile;
-  if (!SdMan.openFileForRead("RBS", RECENT_BOOKS_FILE, inputFile)) {
-    return false;
-  }
-
-  uint8_t version;
-  serialization::readPod(inputFile, version);
-  if (version != RECENT_BOOKS_FILE_VERSION) {
-    if (version == 1 || version == 2) {
-      // Old version, just read paths
-      uint8_t count;
-      serialization::readPod(inputFile, count);
-      recentBooks.clear();
-      recentBooks.reserve(count);
-      for (uint8_t i = 0; i < count; i++) {
-        std::string path;
-        serialization::readString(inputFile, path);
-
-        // load book to get missing data
-        RecentBook book = getDataFromBook(path);
-        if (book.title.empty() && book.author.empty() && version == 2) {
-          // Fall back to loading what we can from the store
-          std::string title, author;
-          serialization::readString(inputFile, title);
-          serialization::readString(inputFile, author);
-          recentBooks.push_back({path, title, author, ""});
-        } else {
-          recentBooks.push_back(book);
-        }
-      }
-    } else {
-      Serial.printf("[%lu] [RBS] Deserialization failed: Unknown version %u\n", millis(), version);
-      inputFile.close();
+  std::vector<RecentBook> parsedBooks;
+  if (!loadRecentBooksFromPath(RECENT_BOOKS_FILE, parsedBooks)) {
+    Serial.printf("[%lu] [RBS] Failed to load recent books, trying backup\n", millis());
+    if (!loadRecentBooksFromPath(RECENT_BOOKS_BAK_FILE, parsedBooks)) {
+      Serial.printf("[%lu] [RBS] Failed to load recent books backup\n", millis());
       return false;
     }
-  } else {
-    uint8_t count;
-    serialization::readPod(inputFile, count);
-
-    recentBooks.clear();
-    recentBooks.reserve(count);
-
-    for (uint8_t i = 0; i < count; i++) {
-      std::string path, title, author, coverBmpPath;
-      serialization::readString(inputFile, path);
-      serialization::readString(inputFile, title);
-      serialization::readString(inputFile, author);
-      serialization::readString(inputFile, coverBmpPath);
-      recentBooks.push_back({path, title, author, coverBmpPath});
-    }
   }
 
-  inputFile.close();
+  recentBooks = std::move(parsedBooks);
   Serial.printf("[%lu] [RBS] Recent books loaded from file (%d entries)\n", millis(), recentBooks.size());
   return true;
 }

@@ -6,18 +6,26 @@
 #include <SDCardManager.h>
 #include <Serialization.h>
 
+#include <algorithm>
+#include <cctype>
+
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "EpubReaderChapterSelectionActivity.h"
 #include "EpubReaderPercentSelectionActivity.h"
-#include "KOReaderCredentialStore.h"
-#include "KOReaderSyncActivity.h"
+// stage10: KOReaderSync 砍掉，台灣使用者用不到
+// stage12: 書籤系統
+#include "BookmarkActivity.h"
+#include "BookmarkStore.h"
+#include "EpubBookmarkSelectionActivity.h"
+#include "LanguageMapper.h"
 #include "MappedInputManager.h"
 #include "RecentBooksStore.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/AtomicFileWriter.h"
 
-#include "JianGuoSyncActivity.h"
+// stage10: JianGuoSync 砍掉，台灣使用者用不到（堅果雲是中國服務）
 
 
 namespace {
@@ -29,7 +37,65 @@ constexpr int progressBarMarginTop = 1;
 constexpr uint32_t WALLPAPER_PXC_MAGIC = 0x31584350;   // "PXC1"
 constexpr uint16_t WALLPAPER_PXC_VERSION = 1;
 constexpr char WALLPAPER_PXC_PATH[] = "/.crosspoint/wallpaper_bg.pxc";
+constexpr char WALLPAPER_VERTICAL_PXC_PATH[] = "/.crosspoint/wallpaper_bg_vertical.pxc";
+constexpr char READER_SLEEP_EXCERPT_PATH[] = "/.crosspoint/reader_sleep_excerpt.txt";
 constexpr uint8_t WALLPAPER_PXC_FIXED_ORIENTATION = CrossPointSettings::ORIENTATION::PORTRAIT;
+
+std::string normalizeSleepExcerptLine(const std::string& text) {
+  std::string out;
+  out.reserve(text.size());
+  bool previousSpace = true;
+  for (const char ch : text) {
+    const auto uch = static_cast<unsigned char>(ch);
+    const bool space = std::isspace(uch) != 0;
+    if (space) {
+      if (!previousSpace) {
+        out.push_back(' ');
+      }
+      previousSpace = true;
+      continue;
+    }
+    out.push_back(ch);
+    previousSpace = false;
+  }
+  while (!out.empty() && out.back() == ' ') {
+    out.pop_back();
+  }
+  return out;
+}
+
+std::string makeFallbackSpineTitle(const std::string& href, const int spineIndex) {
+  std::string label = href;
+  const size_t slashPos = label.find_last_of('/');
+  if (slashPos != std::string::npos && slashPos + 1 < label.size()) {
+    label = label.substr(slashPos + 1);
+  }
+
+  const size_t hashPos = label.find('#');
+  if (hashPos != std::string::npos) {
+    label = label.substr(0, hashPos);
+  }
+
+  const size_t dotPos = label.find_last_of('.');
+  if (dotPos != std::string::npos && dotPos > 0) {
+    label = label.substr(0, dotPos);
+  }
+
+  for (char& ch : label) {
+    if (ch == '_' || ch == '-') {
+      ch = ' ';
+    }
+  }
+
+  if (!label.empty()) {
+    return label;
+  }
+  return std::string(getChineseName("Section ")) + std::to_string(spineIndex + 1);
+}
+
+bool isVerticalWritingMode(const CssWritingMode writingMode) {
+  return writingMode == CssWritingMode::VerticalRl || writingMode == CssWritingMode::VerticalLr;
+}
 
 bool loadWallpaperPxcToFramebuffer(const std::string& pxcPath, GfxRenderer& renderer) {
   FsFile input;
@@ -175,6 +241,7 @@ void EpubReaderActivity::onEnter() {
 
 
   FsFile f;
+  bool loadedProgress = false;
   if (SdMan.openFileForRead("ERS", epub->getCachePath() + "/progress.bin", f)) {
     uint8_t data[6];
     int dataSize = f.read(data, 6);
@@ -189,6 +256,7 @@ void EpubReaderActivity::onEnter() {
         nextPageNumber = 0;
       }
       cachedSpineIndex = currentSpineIndex;
+      loadedProgress = true;
       Serial.printf("[%lu] [ERS] Loaded cache: %d, %d\n", millis(), currentSpineIndex, nextPageNumber);
     }
     if (dataSize == 6) {
@@ -196,14 +264,33 @@ void EpubReaderActivity::onEnter() {
     }
     f.close();
   }
-  // We may want a better condition to detect if we are opening for the first time.
-  // This will trigger if the book is re-opened at Chapter 0.
-  if (currentSpineIndex == 0) {
-    int textSpineIndex = epub->getSpineIndexForTextReference();
-    if (textSpineIndex != 0) {
-      currentSpineIndex = textSpineIndex;
-      Serial.printf("[%lu] [ERS] Opened for first time, navigating to text reference at index %d\n", millis(),
-                    textSpineIndex);
+
+  // stage15.57: 第一次開書時先看 EPUB 目錄設定，從第一個有效 TOC 章節開始。
+  // 沒有 TOC 時才 fallback 到 OPF 的 text reference。
+  if (!loadedProgress) {
+    if (epub->getTocItemsCount() == 0 && epub->isLargeBookMode()) {
+      epub->ensureTocLoaded();
+    }
+
+    int startSpineIndex = -1;
+    const int tocCount = epub->getTocItemsCount();
+    for (int i = 0; i < tocCount; ++i) {
+      const auto tocItem = epub->getTocItem(i);
+      if (tocItem.spineIndex >= 0 && tocItem.spineIndex < epub->getSpineItemsCount()) {
+        startSpineIndex = tocItem.spineIndex;
+        Serial.printf("[%lu] [ERS] First-open start from TOC %d -> spine %d\n", millis(), i, startSpineIndex);
+        break;
+      }
+    }
+
+    if (startSpineIndex < 0) {
+      startSpineIndex = epub->getSpineIndexForTextReference();
+      Serial.printf("[%lu] [ERS] First-open start from text reference -> spine %d\n", millis(), startSpineIndex);
+    }
+
+    if (startSpineIndex >= 0 && startSpineIndex < epub->getSpineItemsCount()) {
+      currentSpineIndex = startSpineIndex;
+      nextPageNumber = 0;
     }
   }
 
@@ -211,6 +298,19 @@ void EpubReaderActivity::onEnter() {
   APP_STATE.openEpubPath = epub->getPath();
   APP_STATE.saveToFile();
   RECENT_BOOKS.addBook(epub->getPath(), epub->getTitle(), epub->getAuthor(), epub->getThumbBmpPath());
+
+  useBookEmbeddedStyle = SETTINGS.embeddedStyle;
+  if (shouldAskLayoutConflict()) {
+    state = EPUBState::LAYOUT_CONFLICT;
+    layoutConflictSelection = 0;
+    skipNextButtonCheck = true;
+  }
+
+  // stage15.27 (嚕寶要求改回單章獨立、做法 A):
+  //   拿掉 stage15.21 全書 pre-scan、改回「進到該章節才建 cache」
+  //   避免一次跑 100+ 章把 ESP32-C3 記憶體吃滿、影響書封 thumb 生成
+  //   每章節進入時、loadSectionFile 失敗 → createSectionFile 才建（原本就有的邏輯）
+  // preScanAllChapters();  // 已停用
 
   // Trigger first update
   updateRequired = true;
@@ -244,6 +344,42 @@ void EpubReaderActivity::onExit() {
 }
 
 void EpubReaderActivity::loop() {
+  if (state == EPUBState::LAYOUT_CONFLICT) {
+    if (skipNextButtonCheck) {
+      const bool buttonsCleared = !mappedInput.isPressed(MappedInputManager::Button::Back) &&
+                                  !mappedInput.isPressed(MappedInputManager::Button::Confirm) &&
+                                  !mappedInput.isPressed(MappedInputManager::Button::Left) &&
+                                  !mappedInput.isPressed(MappedInputManager::Button::Right) &&
+                                  !mappedInput.wasReleased(MappedInputManager::Button::Back) &&
+                                  !mappedInput.wasReleased(MappedInputManager::Button::Confirm) &&
+                                  !mappedInput.wasReleased(MappedInputManager::Button::Left) &&
+                                  !mappedInput.wasReleased(MappedInputManager::Button::Right);
+      if (buttonsCleared) {
+        skipNextButtonCheck = false;
+      }
+      return;
+    }
+
+    if (mappedInput.wasReleased(MappedInputManager::Button::Left) ||
+        mappedInput.wasReleased(MappedInputManager::Button::Right)) {
+      layoutConflictSelection = 1 - layoutConflictSelection;
+      updateRequired = true;
+      return;
+    }
+
+    if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+      layoutConflictSelection = 1;
+      applyLayoutConflictChoice();
+      return;
+    }
+
+    if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+      applyLayoutConflictChoice();
+      return;
+    }
+    return;
+  }
+
   if(state== EPUBState::READING){
     if (mappedInput.isPressed(MappedInputManager::Button::Confirm) && mappedInput.getHeldTime() >= 1000) {
       Serial.printf("[%lu] [ERS] Long press detected, entering settings\n", millis());
@@ -363,6 +499,9 @@ void EpubReaderActivity::loop() {
       nextPageNumber = 0;
       currentSpineIndex = nextTriggered ? currentSpineIndex + 1 : currentSpineIndex - 1;
       section.reset();
+      // stage15.56: 長按跳章節、舊預讀作廢
+      prefetchedSpineIndex = -1;
+      prefetchPending = false;
       xSemaphoreGive(renderingMutex);
       updateRequired = true;
       return;
@@ -374,6 +513,8 @@ void EpubReaderActivity::loop() {
       return;
     }
 
+    // stage15.14: 撤回 stage15.13 verticalConsumedPages 補丁
+    //             SAM 路徑下、ChapterHtmlSlimParser 已按直排切 Page、翻頁照舊 ++
     if (prevTriggered) {
       if (section->currentPage > 0) {
         section->currentPage--;
@@ -389,6 +530,12 @@ void EpubReaderActivity::loop() {
     } else {
       if (section->currentPage < section->pageCount - 1) {
         section->currentPage++;
+        // stage15.57: 剩 5 頁時安排補 cache，讓前方可讀頁數回到約 20 頁。
+        //   實際建 cache 在 displayTaskLoop 的閒置時段做、不阻塞翻頁
+        if (section->pageCount - 1 - section->currentPage <= kPageCacheRefillThreshold &&
+            currentSpineIndex + 1 < epub->getSpineItemsCount()) {
+          prefetchPending = true;
+        }
       } else {
         // We don't want to delete the section mid-render, so grab the semaphore
         xSemaphoreTake(renderingMutex, portMAX_DELAY);
@@ -421,7 +568,7 @@ void EpubReaderActivity::loop() {
       return;
     }
     if (mappedInput.wasPressed(MappedInputManager::Button::Left)) {
-      Serial.printf("[%lu] [ERS] 进入左边距设置\n", millis());
+      Serial.printf("[%lu] [ERS] 進入左邊距設定\n", millis());
       xSemaphoreTake(renderingMutex, portMAX_DELAY);
       SETTINGS.screenMargin_Left+=5;
       xSemaphoreGive(renderingMutex);
@@ -429,7 +576,7 @@ void EpubReaderActivity::loop() {
       updateRequired = true;
     }
     if (mappedInput.wasPressed(MappedInputManager::Button::Right)) {
-      Serial.printf("[%lu] [ERS] 进入右边距设置\n", millis());
+      Serial.printf("[%lu] [ERS] 進入右邊距設定\n", millis());
       xSemaphoreTake(renderingMutex, portMAX_DELAY);
       SETTINGS.screenMargin_Right+=5;
       xSemaphoreGive(renderingMutex);
@@ -438,7 +585,7 @@ void EpubReaderActivity::loop() {
       updateRequired = true;
     }
     if (mappedInput.wasPressed(MappedInputManager::Button::Up)) {
-      Serial.printf("[%lu] [ERS] 进入上边距设置\n", millis());
+      Serial.printf("[%lu] [ERS] 進入上邊距設定\n", millis());
       xSemaphoreTake(renderingMutex, portMAX_DELAY);
       SETTINGS.screenMargin_Top+=5;
       xSemaphoreGive(renderingMutex);
@@ -446,16 +593,16 @@ void EpubReaderActivity::loop() {
       updateRequired = true;
     }
     if (mappedInput.wasPressed(MappedInputManager::Button::Down)) {
-      Serial.printf("[%lu] [ERS] 进入下边距设置\n", millis());
+      Serial.printf("[%lu] [ERS] 進入下邊距設定\n", millis());
       xSemaphoreTake(renderingMutex, portMAX_DELAY);
       SETTINGS.screenMargin_Bottom+=5;
-      Serial.printf("[%lu] [ERS] Bottom为%d\n", millis(), SETTINGS.screenMargin_Bottom);
+      Serial.printf("[%lu] [ERS] Bottom為%d\n", millis(), SETTINGS.screenMargin_Bottom);
       xSemaphoreGive(renderingMutex);
       pendingMarginRelayout = true;
       updateRequired = true;
     }
     if (mappedInput.isPressed(MappedInputManager::Button::Left) && mappedInput.getHeldTime() >= 2000) {
-      Serial.printf("[%lu] [ERS] 进入左边距设置\n", millis());
+      Serial.printf("[%lu] [ERS] 進入左邊距設定\n", millis());
       xSemaphoreTake(renderingMutex, portMAX_DELAY);
       SETTINGS.screenMargin_Left-=5;
       xSemaphoreGive(renderingMutex);
@@ -463,7 +610,7 @@ void EpubReaderActivity::loop() {
       updateRequired = true;
     }
     if (mappedInput.isPressed(MappedInputManager::Button::Right) && mappedInput.getHeldTime() >= 2000) {
-      Serial.printf("[%lu] [ERS] 进入右边距设置\n", millis());
+      Serial.printf("[%lu] [ERS] 進入右邊距設定\n", millis());
       xSemaphoreTake(renderingMutex, portMAX_DELAY);
       SETTINGS.screenMargin_Right-=5;
       xSemaphoreGive(renderingMutex);
@@ -472,7 +619,7 @@ void EpubReaderActivity::loop() {
       updateRequired = true;
     }
     if (mappedInput.isPressed(MappedInputManager::Button::Up) && mappedInput.getHeldTime() >= 2000) {
-      Serial.printf("[%lu] [ERS] 进入上边距设置\n", millis());
+      Serial.printf("[%lu] [ERS] 進入上邊距設定\n", millis());
       xSemaphoreTake(renderingMutex, portMAX_DELAY);
       SETTINGS.screenMargin_Top-=5;
       xSemaphoreGive(renderingMutex);
@@ -480,10 +627,10 @@ void EpubReaderActivity::loop() {
       updateRequired = true;
     }
     if (mappedInput.isPressed(MappedInputManager::Button::Down) && mappedInput.getHeldTime() >= 2000) {
-      Serial.printf("[%lu] [ERS] 进入下边距设置\n", millis());
+      Serial.printf("[%lu] [ERS] 進入下邊距設定\n", millis());
       xSemaphoreTake(renderingMutex, portMAX_DELAY);
       SETTINGS.screenMargin_Bottom-=5;
-      Serial.printf("[%lu] [ERS] Bottom为%d\n", millis(), SETTINGS.screenMargin_Bottom);
+      Serial.printf("[%lu] [ERS] Bottom為%d\n", millis(), SETTINGS.screenMargin_Bottom);
       xSemaphoreGive(renderingMutex);
       pendingMarginRelayout = true;
       updateRequired = true;
@@ -560,6 +707,9 @@ void EpubReaderActivity::jumpToPercent(int percent) {
   nextPageNumber = 0;
   pendingPercentJump = true;
   section.reset();
+  // stage15.56: 百分比跳轉、舊預讀作廢
+  prefetchedSpineIndex = -1;
+  prefetchPending = false;
   xSemaphoreGive(renderingMutex);
 }
 
@@ -589,6 +739,9 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
               currentSpineIndex = newSpineIndex;
               nextPageNumber = 0;
               section.reset();
+              // stage15.56: 選章節跳轉、舊預讀作廢
+              prefetchedSpineIndex = -1;
+              prefetchPending = false;
             }
             exitActivity();
             updateRequired = true;
@@ -598,6 +751,9 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
               currentSpineIndex = newSpineIndex;
               nextPageNumber = newPage;
               section.reset();
+              // stage15.56: 跳到指定頁、舊預讀作廢
+              prefetchedSpineIndex = -1;
+              prefetchPending = false;
             }
             exitActivity();
             updateRequired = true;
@@ -660,57 +816,68 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       pendingGoHome = true;
       break;
     }
-    case EpubReaderMenuActivity::MenuAction::SYNC: {
-      if (KOREADER_STORE.hasCredentials()) {
-        xSemaphoreTake(renderingMutex, portMAX_DELAY);
-        const int currentPage = section ? section->currentPage : 0;
-        const int totalPages = section ? section->pageCount : 0;
-        exitActivity();
-        enterNewActivity(new KOReaderSyncActivity(
-            renderer, mappedInput, epub, epub->getPath(), currentSpineIndex, currentPage, totalPages,
-            [this]() {
-              // On cancel - defer exit to avoid use-after-free
-              pendingSubactivityExit = true;
-            },
-            [this](int newSpineIndex, int newPage) {
-              // On sync complete - update position and defer exit
-              if (currentSpineIndex != newSpineIndex || (section && section->currentPage != newPage)) {
-                currentSpineIndex = newSpineIndex;
-                nextPageNumber = newPage;
-                section.reset();
-              }
-              pendingSubactivityExit = true;
-            }));
-        xSemaphoreGive(renderingMutex);
-      }
-      break;
-    }
-    case EpubReaderMenuActivity::MenuAction::SYNCY: {
-        xSemaphoreTake(renderingMutex, portMAX_DELAY);
-        exitActivity();
-        enterNewActivity(new JianGuoSyncActivity(
-            renderer, mappedInput, epub, epub->getPath(),currentSpineIndex,
-            [this]() {
-              exitActivity();
-              updateRequired = true;
-            },
-            [this](int newSpineIndex) {
-              Serial.printf("[%lu] [JG] 同步完成，新的 spine index: %d\n", millis(), newSpineIndex);
-              // On sync complete - update position and defer exit
-              if (currentSpineIndex != newSpineIndex) {
-                currentSpineIndex = newSpineIndex;
-                exitActivity();
-                nextPageNumber = 0;
-                section.reset();
-                updateRequired = true;
-              }
-            }
-          
-          ));
-        xSemaphoreGive(renderingMutex);
-      break;
-    }
+    // stage10: SYNC (KOReader) 與 SYNCY (JianGuo) 砍掉，台灣使用者用不到
+    // stage12: 書籤系統
+    case EpubReaderMenuActivity::MenuAction::BOOKMARK_LIST: {
+      xSemaphoreTake(renderingMutex, portMAX_DELAY);
+      exitActivity();
+      enterNewActivity(new EpubBookmarkSelectionActivity(
+          renderer, mappedInput, epub,
+          [this]() {
+            exitActivity();
+            updateRequired = true;
+          },
+          [this](const BookmarkStore::BookmarkRecord& record) {
+            const int spineCount = epub ? epub->getSpineItemsCount() : 0;
+            const int bookmarkSpine = static_cast<int>(record.pos1);
+            const int bookmarkPage = static_cast<int>(record.pos2);
+            const int bookmarkPageCount = static_cast<int>(record.pos3);
 
+            if (spineCount > 0 && bookmarkSpine >= 0 && bookmarkSpine < spineCount && bookmarkPage >= 0) {
+              xSemaphoreTake(renderingMutex, portMAX_DELAY);
+              currentSpineIndex = bookmarkSpine;
+              nextPageNumber = bookmarkPage;
+              cachedSpineIndex = bookmarkSpine;
+              cachedChapterTotalPageCount = bookmarkPageCount > 0 ? bookmarkPageCount : 0;
+              section.reset();
+              // stage15.56: 跳到書籤、舊預讀作廢
+              prefetchedSpineIndex = -1;
+              prefetchPending = false;
+              xSemaphoreGive(renderingMutex);
+            } else {
+              jumpToPercent(static_cast<int>(record.progressPercent));
+            }
+            exitActivity();
+            updateRequired = true;
+          }));
+      xSemaphoreGive(renderingMutex);
+      break;
+    }
+    case EpubReaderMenuActivity::MenuAction::ADD_BOOKMARK: {
+      float bookProgress = 0.0f;
+      int currentPage = 0;
+      int totalPages = 0;
+      if (section) {
+        currentPage = section->currentPage;
+        totalPages = section->pageCount;
+      }
+      if (epub && epub->getBookSize() > 0 && totalPages > 0) {
+        const float chapterProgress = static_cast<float>(currentPage) / static_cast<float>(totalPages);
+        bookProgress = epub->calculateProgress(currentSpineIndex, chapterProgress) * 100.0f;
+      }
+      const int percent = clampPercent(static_cast<int>(bookProgress + 0.5f));
+
+      xSemaphoreTake(renderingMutex, portMAX_DELAY);
+      exitActivity();
+      enterNewActivity(new BookmarkActivity(
+          renderer, mappedInput, epub->getPath(), epub->getCachePath(), percent, currentSpineIndex, currentPage,
+          totalPages, [this](bool) {
+            exitActivity();
+            updateRequired = true;
+          }));
+      xSemaphoreGive(renderingMutex);
+      break;
+    }
   }
 }
 
@@ -751,15 +918,141 @@ void EpubReaderActivity::displayTaskLoop() {
       APP_STATE.isRenderComplete = true;  // 标记渲染完成（包括 saveProgress）
       APP_STATE.saveToFile();
       xSemaphoreGive(renderingMutex);     // 释放锁
+    } else if (prefetchPending && state == EPUBState::READING) {
+      // stage15.56: 閒置時做預讀、不阻塞翻頁
+      //   updateRequired 為 false 才動、確保不會搶到正常 render 之前
+      //   READING 狀態才做、避免設定畫面被卡
+      prefetchPending = false;
+      xSemaphoreTake(renderingMutex, portMAX_DELAY);
+      prefetchNextChapter();
+      xSemaphoreGive(renderingMutex);
     }
     vTaskDelay(10 / portTICK_PERIOD_MS); // 降低轮询频率，节省资源
   }
+}
+
+// stage15.57 (嚕寶要求目錄導向頁面 cache):
+//   Section cache 仍是章節檔案粒度；這裡用多個章節 cache 組成「前方約 20 頁」的閱讀視窗。
+//   目前章節 render 完代表第一章前段已可讀；閒置時從下一章開始補，剩 5 頁時再補後面。
+void EpubReaderActivity::prefetchNextChapter() {
+  if (!epub) return;
+
+  const int spineCount = epub->getSpineItemsCount();
+  if (currentSpineIndex + 1 >= spineCount) return;
+
+  int cachedPagesAhead = 0;
+  if (section && section->pageCount > 0) {
+    cachedPagesAhead = std::max(0, section->pageCount - 1 - section->currentPage);
+  }
+
+  if (cachedPagesAhead >= kPageCacheWindowSize) {
+    prefetchedSpineIndex = std::max(prefetchedSpineIndex, currentSpineIndex);
+    return;
+  }
+
+  // 算 viewport（跟 renderScreen / preScanAllChapters 同樣邏輯）
+  int orientedMarginTop = 0, orientedMarginRight = 0, orientedMarginBottom = 0, orientedMarginLeft = 0;
+  renderer.getOrientedViewableTRBL(&orientedMarginTop, &orientedMarginRight, &orientedMarginBottom,
+                                   &orientedMarginLeft);
+  auto metrics = UITheme::getInstance().getMetrics();
+  if (SETTINGS.statusBar != CrossPointSettings::STATUS_BAR_MODE::NONE) {
+    const bool showProgressBar = SETTINGS.statusBar == CrossPointSettings::STATUS_BAR_MODE::BOOK_PROGRESS_BAR ||
+                                 SETTINGS.statusBar == CrossPointSettings::STATUS_BAR_MODE::ONLY_BOOK_PROGRESS_BAR ||
+                                 SETTINGS.statusBar == CrossPointSettings::STATUS_BAR_MODE::CHAPTER_PROGRESS_BAR;
+    orientedMarginBottom += statusBarMargin +
+                            (showProgressBar ? (metrics.bookProgressBarHeight + progressBarMarginTop) : 0);
+  }
+  orientedMarginTop += SETTINGS.screenMargin_Top;
+  orientedMarginLeft += SETTINGS.screenMargin_Left;
+  orientedMarginRight += SETTINGS.screenMargin_Right;
+  orientedMarginBottom += SETTINGS.screenMargin_Bottom;
+  const uint16_t viewportWidth = renderer.getScreenWidth() - orientedMarginLeft - orientedMarginRight;
+  const uint16_t viewportHeight = renderer.getScreenHeight() - orientedMarginTop - orientedMarginBottom;
+  const bool readerSettingVertical = SETTINGS.textLayout == CrossPointSettings::TEXT_VERTICAL;
+  const bool bookStyleVertical = epub && epub->hasCssWritingMode() && isVerticalWritingMode(epub->getCssWritingMode());
+  // stage27.1: 書沒指定 writing-mode 時直接看使用者設定（不被 useBookEmbeddedStyle 蓋掉）
+  //   原本邏輯：useBookEmbeddedStyle=true 強制走 bookStyleVertical，而沒指定的書 bookStyleVertical=false
+  //   結果使用者設定的「直排」永遠被覆蓋成橫排
+  const bool bookHasExplicitWritingMode = epub && epub->hasCssWritingMode();
+  const bool verticalLayout = (useBookEmbeddedStyle && bookHasExplicitWritingMode)
+                                  ? bookStyleVertical
+                                  : readerSettingVertical;
+
+  const uint32_t prefetchStart = millis();
+  int builtCount = 0;
+  int hitCount = 0;
+  const auto noopPopup = []() {};  // 預讀不顯示 popup、避免畫面閃
+
+  for (int scanIndex = currentSpineIndex + 1;
+       scanIndex < spineCount && cachedPagesAhead < kPageCacheWindowSize;
+       ++scanIndex) {
+    Section scanSection(epub, scanIndex, renderer);
+    bool hasSectionCache = scanSection.loadSectionFile(
+        SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(),
+        SETTINGS.extraParagraphSpacing, SETTINGS.paragraphAlignment, viewportWidth, viewportHeight,
+        SETTINGS.hyphenationEnabled, SETTINGS.wordSpacing, SETTINGS.firstlineintented, useBookEmbeddedStyle,
+        verticalLayout);
+
+    if (hasSectionCache) {
+      hitCount++;
+    } else {
+      Serial.printf("[%lu] [ERS] Page-window cache ch %d: building...\n", millis(), scanIndex);
+      hasSectionCache = scanSection.createSectionFile(
+          SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(),
+          SETTINGS.extraParagraphSpacing, SETTINGS.paragraphAlignment, viewportWidth, viewportHeight,
+          SETTINGS.hyphenationEnabled, SETTINGS.wordSpacing, SETTINGS.firstlineintented, useBookEmbeddedStyle,
+          verticalLayout, noopPopup);
+      if (!hasSectionCache) {
+        Serial.printf("[%lu] [ERS] Page-window cache ch %d failed\n", millis(), scanIndex);
+        break;
+      }
+      builtCount++;
+    }
+
+    cachedPagesAhead += scanSection.pageCount;
+    prefetchedSpineIndex = scanIndex;
+  }
+
+  Serial.printf("[%lu] [ERS] Page-window cache ready: ahead=%d pages, tail=%d, hit=%d, built=%d, %lu ms\n",
+                millis(), cachedPagesAhead, prefetchedSpineIndex, hitCount, builtCount, millis() - prefetchStart);
 }
 
 // TODO: Failure handling
 void EpubReaderActivity::renderScreen() {
   if (!epub) {
     return;
+  }
+
+  if (state == EPUBState::LAYOUT_CONFLICT) {
+    renderLayoutConflictPrompt();
+    return;
+  }
+
+  // stage15.30 + 15.31:
+  //   切字體 / 行距 / 字距後、section 必須 reset 重 layout、避免句子位置錯亂
+  //   每次 render 都 query SETTINGS 比對、不一致就 reset
+  //   為避免「開書不順」：lastRenderedFontId 從第一次 section 建好就要 cache 當前值
+  {
+    const int curFontId = SETTINGS.getReaderFontId();
+    const float curLineCompression = SETTINGS.getReaderLineCompression();
+    const uint8_t curWordSpacing = SETTINGS.wordSpacing;
+    if (section && lastRenderedFontId != -1 &&
+        (curFontId != lastRenderedFontId ||
+         curLineCompression != lastRenderedLineCompression ||
+         curWordSpacing != lastRenderedWordSpacing)) {
+      Serial.printf("[%lu] [ERS] Font/layout changed, reset section\n", millis());
+      cachedSpineIndex = currentSpineIndex;
+      cachedChapterTotalPageCount = section->pageCount;
+      nextPageNumber = section->currentPage;
+      section.reset();
+      // stage15.56: 字體/排版改變、舊預讀章節的 cache 也失效、重置
+      prefetchedSpineIndex = -1;
+      prefetchPending = false;
+    }
+    // 每次 render 都更新 cache、確保 settings 改變後下次 render 偵測得到
+    lastRenderedFontId = curFontId;
+    lastRenderedLineCompression = curLineCompression;
+    lastRenderedWordSpacing = curWordSpacing;
   }
 
   // edge case handling for sub-zero spine index
@@ -774,7 +1067,7 @@ void EpubReaderActivity::renderScreen() {
   // Show end of book screen
   if (currentSpineIndex == epub->getSpineItemsCount()) {
     renderer.clearScreen();
-    renderer.drawCenteredText(UI_12_FONT_ID, 300, "End of book", true, EpdFontFamily::BOLD);
+    renderer.drawCenteredText(UI_12_FONT_ID, 300, getChineseName("End of book"), true, EpdFontFamily::BOLD);
     renderer.displayBuffer();
     return;
   }
@@ -803,6 +1096,16 @@ void EpubReaderActivity::renderScreen() {
   orientedMarginRight += SETTINGS.screenMargin_Right;
   orientedMarginBottom += SETTINGS.screenMargin_Bottom; 
 
+  const bool readerSettingVertical = SETTINGS.textLayout == CrossPointSettings::TEXT_VERTICAL;
+  const bool bookStyleVertical = epub && epub->hasCssWritingMode() && isVerticalWritingMode(epub->getCssWritingMode());
+  // stage27.1: 書沒指定 writing-mode 時直接看使用者設定（不被 useBookEmbeddedStyle 蓋掉）
+  //   原本邏輯：useBookEmbeddedStyle=true 強制走 bookStyleVertical，而沒指定的書 bookStyleVertical=false
+  //   結果使用者設定的「直排」永遠被覆蓋成橫排
+  const bool bookHasExplicitWritingMode = epub && epub->hasCssWritingMode();
+  const bool verticalLayout = (useBookEmbeddedStyle && bookHasExplicitWritingMode)
+                                  ? bookStyleVertical
+                                  : readerSettingVertical;
+  const bool backgroundVerticalLayout = readerSettingVertical || bookStyleVertical;
 
   if (!section) {
     const auto filepath = epub->getSpineItem(currentSpineIndex).href;
@@ -817,14 +1120,14 @@ void EpubReaderActivity::renderScreen() {
 
     if (!section->loadSectionFile(SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(),
                                   SETTINGS.extraParagraphSpacing, SETTINGS.paragraphAlignment, viewportWidth,
-                                  viewportHeight, SETTINGS.hyphenationEnabled,SETTINGS.wordSpacing,SETTINGS.firstlineintented, SETTINGS.embeddedStyle)) {
+                                  viewportHeight, SETTINGS.hyphenationEnabled,SETTINGS.wordSpacing,SETTINGS.firstlineintented, useBookEmbeddedStyle, verticalLayout)) {
       Serial.printf("[%lu] [ERS] Cache not found, building...\n", millis());
 
       const auto popupFn = [this]() { GUI.drawPopup(renderer, "Indexing..."); };
 
       if (!section->createSectionFile(SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(),
                                       SETTINGS.extraParagraphSpacing, SETTINGS.paragraphAlignment, viewportWidth,
-                                      viewportHeight, SETTINGS.hyphenationEnabled, SETTINGS.wordSpacing, SETTINGS.firstlineintented, SETTINGS.embeddedStyle, popupFn)) {
+                                      viewportHeight, SETTINGS.hyphenationEnabled, SETTINGS.wordSpacing, SETTINGS.firstlineintented, useBookEmbeddedStyle, verticalLayout, popupFn)) {
         Serial.printf("[%lu] [ERS] Failed to persist page data to SD\n", millis());
         section.reset();
         return;
@@ -864,14 +1167,24 @@ void EpubReaderActivity::renderScreen() {
   renderer.clearScreen();
     //加背景
     if(SETTINGS.ReadingScreenEnabled){
-      Serial.printf("[%lu] [ERS] 壁纸屏幕开启，渲染壁纸屏幕\n");
-      renderPngSleepScreen(renderer);
+      Serial.printf("[%lu] [ERS] 桌布螢幕開啟，渲染桌布螢幕\n");
+      renderPngSleepScreen(renderer, backgroundVerticalLayout);
     }
 
 
   if (section->pageCount == 0) {
-    Serial.printf("[%lu] [ERS] No pages to render\n", millis());
-    renderer.drawCenteredText(UI_12_FONT_ID, 300, "Empty chapter", true, EpdFontFamily::BOLD);
+    Serial.printf("[%lu] [ERS] No pages to render (spine %d)\n", millis(), currentSpineIndex);
+    // stage22.5: Kobo 加工的 EPUB 第一個 spine 常常是 SVG 封面（無文字），渲染後 pageCount=0
+    // 自動往下找第一個非空 spine，避免畫面停在「Empty chapter」讓使用者誤以為打不開
+    const int spineCount = epub->getSpineItemsCount();
+    if (currentSpineIndex + 1 < spineCount) {
+      Serial.printf("[%lu] [ERS] Auto-skip empty section, jump to spine %d\n", millis(), currentSpineIndex + 1);
+      currentSpineIndex += 1;
+      nextPageNumber = 0;
+      section.reset();
+      return renderScreen();
+    }
+    renderer.drawCenteredText(UI_12_FONT_ID, 300, getChineseName("Empty chapter"), true, EpdFontFamily::BOLD);
     renderStatusBar(orientedMarginRight, orientedMarginBottom,orientedMarginTop, orientedMarginLeft);
     renderer.displayBuffer();
     return;
@@ -879,7 +1192,7 @@ void EpubReaderActivity::renderScreen() {
 
   if (section->currentPage < 0 || section->currentPage >= section->pageCount) {
     Serial.printf("[%lu] [ERS] Page out of bounds: %d (max %d)\n", millis(), section->currentPage, section->pageCount);
-    renderer.drawCenteredText(UI_12_FONT_ID, 300, "Out of bounds", true, EpdFontFamily::BOLD);
+    renderer.drawCenteredText(UI_12_FONT_ID, 300, getChineseName("Out of bounds"), true, EpdFontFamily::BOLD);
     renderStatusBar(orientedMarginRight, orientedMarginBottom,orientedMarginTop, orientedMarginLeft);
     renderer.displayBuffer();
     return;
@@ -893,35 +1206,98 @@ void EpubReaderActivity::renderScreen() {
       section.reset();
       return renderScreen();
     }
+    saveSleepExcerptFromPage(p.get());
     const auto start = millis();
     renderContents(std::move(p), orientedMarginTop, orientedMarginRight, orientedMarginBottom, orientedMarginLeft);
     Serial.printf("[%lu] [ERS] Rendered page in %dms\n", millis(), millis() - start);
   }
   saveProgress(currentSpineIndex, section->currentPage, section->pageCount);
+
+  const int remainingPagesInCurrentSection = section->pageCount - 1 - section->currentPage;
+  if (state == EPUBState::READING &&
+      (prefetchedSpineIndex < currentSpineIndex || remainingPagesInCurrentSection <= kPageCacheRefillThreshold)) {
+    prefetchPending = true;
+  }
 }
 
 
 
 void EpubReaderActivity::saveProgress(int spineIndex, int currentPage, int pageCount) {
-  FsFile f;
-  if (SdMan.openFileForWrite("ERS", epub->getCachePath() + "/progress.bin", f)) {
-    uint8_t data[6];
-    data[0] = currentSpineIndex & 0xFF;
-    data[1] = (currentSpineIndex >> 8) & 0xFF;
-    data[2] = currentPage & 0xFF;
-    data[3] = (currentPage >> 8) & 0xFF;
-    data[4] = pageCount & 0xFF;
-    data[5] = (pageCount >> 8) & 0xFF;
-    f.write(data, 6);
-    f.close();
+  uint8_t data[6];
+  data[0] = spineIndex & 0xFF;
+  data[1] = (spineIndex >> 8) & 0xFF;
+  data[2] = currentPage & 0xFF;
+  data[3] = (currentPage >> 8) & 0xFF;
+  data[4] = pageCount & 0xFF;
+  data[5] = (pageCount >> 8) & 0xFF;
+  if (writeBinaryFileAtomic("ERS", epub->getCachePath() + "/progress.bin", data, sizeof(data))) {
     Serial.printf("[ERS] Progress saved: Chapter %d, Page %d\n", spineIndex, currentPage);
   } else {
     Serial.printf("[ERS] Could not save progress!\n");
   }
+  // stage21: 同步回寫進度到 recent.bin，讓主畫面不需再 epub.load
+  const int spineCount = epub->getSpineItemsCount();
+  if (spineCount > 0) {
+    const int pct = spineIndex * 100 / spineCount;
+    RECENT_BOOKS.updateProgress(epub->getPath(), pct);
+  }
 }
+
+void EpubReaderActivity::saveSleepExcerptFromPage(const Page* page) const {
+  if (!page || !epub) {
+    return;
+  }
+
+  std::string excerpt;
+  excerpt.reserve(192);
+  for (const auto& element : page->elements) {
+    if (!element || element->getTag() != TAG_PageLine) {
+      continue;
+    }
+    auto pl = static_cast<PageLine*>(element.get());
+    if (!pl->hasContent()) {
+      continue;
+    }
+    const std::string line = normalizeSleepExcerptLine(pl->getLineText());
+    if (line.empty()) {
+      continue;
+    }
+    if (!excerpt.empty()) {
+      excerpt.push_back(' ');
+    }
+    excerpt += line;
+    if (excerpt.size() >= 180) {
+      break;
+    }
+  }
+
+  SdMan.mkdir("/.crosspoint");
+  const std::string payload = epub->getPath() + "\n" + excerpt;
+  writeTextFileAtomic("ERS", READER_SLEEP_EXCERPT_PATH, payload);
+}
+// stage15.12: 直排跨 Page 拼字緩解「底部空白」
+//             嚕寶原則 8：上層 (EpubReader) 負責排版、底層 (Page) 不知道
+//             這個函式從 PageLine 收集文字、不真的呼叫 page->render
+std::string EpubReaderActivity::collectVerticalTextFromPage(const Page* page) {
+  if (!page) return "";
+  std::string result;
+  for (const auto& element : page->elements) {
+    if (!element || element->getTag() != TAG_PageLine) continue;
+    auto pl = static_cast<PageLine*>(element.get());
+    if (!pl->hasContent()) continue;
+    const std::string lineText = pl->getLineText();
+    if (lineText.empty()) continue;
+    result += lineText;
+  }
+  return result;
+}
+
 void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int orientedMarginTop,
                                         const int orientedMarginRight, const int orientedMarginBottom,
                                         const int orientedMarginLeft) {
+  // stage15.14: 移除 stage15.12-13 在 EpubReader 拼湊直排的補丁
+  //             改用 SAM 路徑、直排排版在 ParsedText/ChapterHtmlSlimParser 切 Page 階段就做好
+  //             page->render 自己看 BlockStyle.verticalLayout 走 TextBlock::render 直排分支
   auto applySettingMarginPreviewOverlay =
       [this, orientedMarginTop, orientedMarginRight, orientedMarginBottom, orientedMarginLeft]() {
     if (state != EPUBState::SETTING) {
@@ -939,10 +1315,10 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
       renderer.drawRect(contentX, contentY, contentWidth, contentHeight, 3, true);
     }
 
-    const char* line1 = "进入边距设置";
-    const char* line2 = "请注意边框";
-    const char* line3 = "短按加边距";
-    const char* line4 = "长按减边距";
+    const char* line1 = getChineseName("Enter margin settings");
+    const char* line2 = getChineseName("Notice border");
+    const char* line3 = getChineseName("Short press increases margin");
+    const char* line4 = getChineseName("Long press decreases margin");
     const int textW1 = renderer.getTextWidth(UI_12_FONT_ID, line1);
     const int textW2 = renderer.getTextWidth(UI_12_FONT_ID, line2);
     const int boxWidth = std::max(textW1, textW2) + 24;
@@ -958,15 +1334,17 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
     renderer.drawCenteredText(UI_12_FONT_ID, boxY + 8 + 3*lineHeight, line4, true, EpdFontFamily::BOLD);    
   };
 
-  // Force full refresh for pages with images when anti-aliasing is on,
-  // as grayscale tones require half refresh to display correctly
-  bool forceFullRefresh = page->hasImages() && SETTINGS.textAntiAliasing;
   page->render(renderer, SETTINGS.getReaderFontId(), orientedMarginLeft, orientedMarginTop);
   applySettingMarginPreviewOverlay();
   renderStatusBar(orientedMarginRight, orientedMarginBottom,orientedMarginTop, orientedMarginLeft);
-  if (forceFullRefresh || pagesUntilFullRefresh <= 1) {
+  if (pagesUntilFullRefresh <= 1) {
+    // 定期全刷清殘影
     renderer.displayBuffer(HalDisplay::HALF_REFRESH);
     pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
+  } else if (page->hasImages()) {
+    // 有圖片的頁面用雙刷，比 HALF_REFRESH 快且圖片更乾淨
+    renderer.displayBufferClean();
+    pagesUntilFullRefresh--;
   } else {
     renderer.displayBuffer();
     pagesUntilFullRefresh--;
@@ -1000,6 +1378,61 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   renderer.restoreBwBuffer();
 }
 
+bool EpubReaderActivity::shouldAskLayoutConflict() const {
+  if (!epub || !epub->hasCssWritingMode()) {
+    return false;
+  }
+
+  const bool bookVertical = isVerticalWritingMode(epub->getCssWritingMode());
+  const bool readerVertical = SETTINGS.textLayout == CrossPointSettings::TEXT_VERTICAL;
+  return bookVertical != readerVertical;
+}
+
+void EpubReaderActivity::applyLayoutConflictChoice() {
+  xSemaphoreTake(renderingMutex, portMAX_DELAY);
+  useBookEmbeddedStyle = layoutConflictSelection == 0;
+  section.reset();
+  xSemaphoreGive(renderingMutex);
+
+  state = EPUBState::READING;
+  skipNextButtonCheck = true;
+  updateRequired = true;
+}
+
+void EpubReaderActivity::renderLayoutConflictPrompt() {
+  renderer.clearScreen();
+
+  const int screenWidth = renderer.getScreenWidth();
+  const int contentX = 24;
+  const int buttonY = 250;
+  constexpr int buttonWidth = 180;
+  constexpr int buttonHeight = 44;
+  constexpr int buttonGap = 24;
+  const int buttonsX = (screenWidth - (buttonWidth * 2 + buttonGap)) / 2;
+
+  renderer.drawCenteredText(UI_12_FONT_ID, 90, getChineseName("Layout conflict title"), true, EpdFontFamily::BOLD);
+  renderer.drawCenteredText(UI_10_FONT_ID, 130, getChineseName("Layout conflict prompt"));
+
+  const bool bookSelected = layoutConflictSelection == 0;
+  const bool readerSelected = layoutConflictSelection == 1;
+
+  auto drawChoice = [&](const int x, const char* label, const bool selected) {
+    if (selected) {
+      renderer.fillRect(x, buttonY, buttonWidth, buttonHeight, true);
+    }
+    renderer.drawRect(x, buttonY, buttonWidth, buttonHeight, !selected);
+    const int textWidth = renderer.getTextWidth(UI_10_FONT_ID, label, EpdFontFamily::BOLD);
+    const int textX = x + (buttonWidth - textWidth) / 2;
+    renderer.drawText(UI_10_FONT_ID, textX, buttonY + 13, label, !selected, EpdFontFamily::BOLD);
+  };
+
+  drawChoice(buttonsX, getChineseName("Use book layout"), bookSelected);
+  drawChoice(buttonsX + buttonWidth + buttonGap, getChineseName("Use reader settings"), readerSelected);
+
+  renderer.drawText(UI_10_FONT_ID, contentX, 330, getChineseName("Layout conflict controls"));
+  renderer.displayBuffer();
+}
+
 void EpubReaderActivity::renderStatusBar(const int orientedMarginRight, const int orientedMarginBottom,
                                          const int orientedMarginTop, const int orientedMarginLeft) const {
   auto metrics = UITheme::getInstance().getMetrics();
@@ -1028,7 +1461,7 @@ void EpubReaderActivity::renderStatusBar(const int orientedMarginRight, const in
   //int statusBarMargin = renderer.getFontAscenderSize(SMALL_FONT_ID)/2;
   const auto textY = screenHeight - orientedMarginBottom - 8;
   int progressTextWidth = 0;
-  //Serial.printf("[%lu] [ERS] 测试一下位置变了吗: %d", millis(),textY);
+  //Serial.printf("[%lu] [ERS] 測試一下位置變了嗎: %d", millis(),textY);
 
   // Calculate progress in book
   const float sectionChapterProg = static_cast<float>(section->currentPage) / section->pageCount;
@@ -1088,21 +1521,21 @@ void EpubReaderActivity::renderStatusBar(const int orientedMarginRight, const in
     std::string title;
     int titleWidth;
     if (tocIndex == -1) {
-      title = "Unnamed";
-      titleWidth = renderer.getTextWidth(SMALL_FONT_ID, "Unnamed");
+      title = makeFallbackSpineTitle(epub->getSpineItem(currentSpineIndex).href, currentSpineIndex);
+      titleWidth = renderer.getTextWidth(SMALL_FONT_ID, title.c_str());
     } else {
       const auto tocItem = epub->getTocItem(tocIndex);
       title = tocItem.title;
       titleWidth = renderer.getTextWidth(SMALL_FONT_ID, title.c_str());
-      if (titleWidth > availableTitleSpace) {
-        // Not enough space to center on the screen, center it within the remaining space instead
-        availableTitleSpace = rendererableScreenWidth - titleMarginLeft - titleMarginRight;
-        titleMarginLeftAdjusted = titleMarginLeft;
-      }
-      if (titleWidth > availableTitleSpace) {
-        title = renderer.truncatedText(SMALL_FONT_ID, title.c_str(), availableTitleSpace);
-        titleWidth = renderer.getTextWidth(SMALL_FONT_ID, title.c_str());
-      }
+    }
+    if (titleWidth > availableTitleSpace) {
+      // Not enough space to center on the screen, center it within the remaining space instead
+      availableTitleSpace = rendererableScreenWidth - titleMarginLeft - titleMarginRight;
+      titleMarginLeftAdjusted = titleMarginLeft;
+    }
+    if (titleWidth > availableTitleSpace) {
+      title = renderer.truncatedText(SMALL_FONT_ID, title.c_str(), availableTitleSpace);
+      titleWidth = renderer.getTextWidth(SMALL_FONT_ID, title.c_str());
     }
 
     renderer.drawText(SMALL_FONT_ID,
@@ -1114,11 +1547,103 @@ void EpubReaderActivity::renderStatusBar(const int orientedMarginRight, const in
 
 
 
-void EpubReaderActivity::renderPngSleepScreen(GfxRenderer& renderer) const {
-  const std::string pxcPath = WALLPAPER_PXC_PATH;
-  if (loadWallpaperPxcToFramebuffer(pxcPath, renderer)) {
+void EpubReaderActivity::renderPngSleepScreen(GfxRenderer& renderer, const bool verticalLayout) const {
+  if (verticalLayout && loadWallpaperPxcToFramebuffer(WALLPAPER_VERTICAL_PXC_PATH, renderer)) {
+    Serial.printf("[%lu] [SLP] Loaded vertical wallpaper PXC cache\n", millis());
+    return;
+  }
+
+  if (loadWallpaperPxcToFramebuffer(WALLPAPER_PXC_PATH, renderer)) {
     Serial.printf("[%lu] [SLP] Loaded wallpaper PXC cache\n", millis());
     return;
   }
   Serial.printf("[%lu] [SLP] Wallpaper PXC missing, skip reader background\n", millis());
+}
+
+// stage15.21 (嚕寶要求全書預讀):
+//   打開書時、跑迴圈把所有 spine 的 section cache 都建好
+//   loadSectionFile 會檢查 version + 設定、有 cache 就跳過、沒才建
+//   進度條每章更新一次、讓嚕寶看到「讀取全書中 X/Y 章」
+void EpubReaderActivity::preScanAllChapters() {
+  if (!epub) return;
+
+  const int spineCount = epub->getSpineItemsCount();
+  if (spineCount <= 0) return;
+
+  // 算 viewport（跟 renderScreen 同樣邏輯）
+  int orientedMarginTop = 0, orientedMarginRight = 0, orientedMarginBottom = 0, orientedMarginLeft = 0;
+  renderer.getOrientedViewableTRBL(&orientedMarginTop, &orientedMarginRight, &orientedMarginBottom,
+                                   &orientedMarginLeft);
+  auto metrics = UITheme::getInstance().getMetrics();
+  if (SETTINGS.statusBar != CrossPointSettings::STATUS_BAR_MODE::NONE) {
+    const bool showProgressBar = SETTINGS.statusBar == CrossPointSettings::STATUS_BAR_MODE::BOOK_PROGRESS_BAR ||
+                                 SETTINGS.statusBar == CrossPointSettings::STATUS_BAR_MODE::ONLY_BOOK_PROGRESS_BAR ||
+                                 SETTINGS.statusBar == CrossPointSettings::STATUS_BAR_MODE::CHAPTER_PROGRESS_BAR;
+    orientedMarginBottom += statusBarMargin +
+                            (showProgressBar ? (metrics.bookProgressBarHeight + progressBarMarginTop) : 0);
+  }
+  orientedMarginTop += SETTINGS.screenMargin_Top;
+  orientedMarginLeft += SETTINGS.screenMargin_Left;
+  orientedMarginRight += SETTINGS.screenMargin_Right;
+  orientedMarginBottom += SETTINGS.screenMargin_Bottom;
+
+  const uint16_t viewportWidth = renderer.getScreenWidth() - orientedMarginLeft - orientedMarginRight;
+  const uint16_t viewportHeight = renderer.getScreenHeight() - orientedMarginTop - orientedMarginBottom;
+  const bool readerSettingVertical = SETTINGS.textLayout == CrossPointSettings::TEXT_VERTICAL;
+  const bool bookStyleVertical = epub && epub->hasCssWritingMode() && isVerticalWritingMode(epub->getCssWritingMode());
+  // stage27.1: 書沒指定 writing-mode 時直接看使用者設定（不被 useBookEmbeddedStyle 蓋掉）
+  //   原本邏輯：useBookEmbeddedStyle=true 強制走 bookStyleVertical，而沒指定的書 bookStyleVertical=false
+  //   結果使用者設定的「直排」永遠被覆蓋成橫排
+  const bool bookHasExplicitWritingMode = epub && epub->hasCssWritingMode();
+  const bool verticalLayout = (useBookEmbeddedStyle && bookHasExplicitWritingMode)
+                                  ? bookStyleVertical
+                                  : readerSettingVertical;
+
+  // 顯示初始 popup
+  Rect popupRect = GUI.drawPopup(renderer, "讀取全書中...");
+  renderer.displayBuffer();
+
+  Serial.printf("[%lu] [ERS] Pre-scan: %d chapters\n", millis(), spineCount);
+  const uint32_t scanStart = millis();
+  int builtCount = 0;
+  int skippedCount = 0;
+
+  for (int i = 0; i < spineCount; ++i) {
+    // 更新進度條（每章更新）
+    const int percent = (i * 100) / spineCount;
+    GUI.fillPopupProgress(renderer, popupRect, percent);
+    renderer.displayBuffer();
+
+    // 建立 Section（純為了 cache 建立、不保留）
+    Section scanSection(epub, i, renderer);
+
+    // 嘗試 load 既有 cache、有就跳過
+    if (scanSection.loadSectionFile(SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(),
+                                    SETTINGS.extraParagraphSpacing, SETTINGS.paragraphAlignment, viewportWidth,
+                                    viewportHeight, SETTINGS.hyphenationEnabled, SETTINGS.wordSpacing,
+                                    SETTINGS.firstlineintented, useBookEmbeddedStyle, verticalLayout)) {
+      skippedCount++;
+      continue;
+    }
+
+    // 沒 cache、跑 createSectionFile
+    const auto noopPopup = []() {};  // pre-scan 自己有 popup、不要讓 createSectionFile 再開
+    if (!scanSection.createSectionFile(SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(),
+                                       SETTINGS.extraParagraphSpacing, SETTINGS.paragraphAlignment, viewportWidth,
+                                       viewportHeight, SETTINGS.hyphenationEnabled, SETTINGS.wordSpacing,
+                                       SETTINGS.firstlineintented, useBookEmbeddedStyle, verticalLayout, noopPopup)) {
+      Serial.printf("[%lu] [ERS] Pre-scan: chapter %d failed\n", millis(), i);
+      continue;
+    }
+    builtCount++;
+  }
+
+  const uint32_t elapsed = millis() - scanStart;
+  Serial.printf("[%lu] [ERS] Pre-scan done: %d built, %d skipped, %lu ms\n",
+                millis(), builtCount, skippedCount, elapsed);
+
+  // 顯示 100% 完成、稍等一下再進閱讀
+  GUI.fillPopupProgress(renderer, popupRect, 100);
+  renderer.displayBuffer();
+  delay(300);
 }

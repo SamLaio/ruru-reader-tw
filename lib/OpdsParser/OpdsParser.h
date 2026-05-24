@@ -21,6 +21,7 @@ struct OpdsEntry {
   std::string title;
   std::string author;  // Only for books
   std::string href;    // Navigation URL or epub download URL
+  std::string mimeType;
   std::string id;
 };
 
@@ -67,6 +68,10 @@ class OpdsParser final : public Print {
    */
   const std::vector<OpdsEntry>& getEntries() const& { return entries; }
   std::vector<OpdsEntry> getEntries() && { return std::move(entries); }
+  const std::string& getNextHref() const { return nextHref; }
+  const std::string& getPreviousHref() const { return previousHref; }
+  // 別名：相容 stage28.7 的 OpdsBookBrowserActivity 命名
+  const std::string& getNextPageHref() const { return nextHref; }
 
   /**
    * Get only book entries (legacy compatibility).
@@ -90,6 +95,8 @@ class OpdsParser final : public Print {
 
   XML_Parser parser = nullptr;
   std::vector<OpdsEntry> entries;
+  std::string nextHref;
+  std::string previousHref;
   OpdsEntry currentEntry;
   std::string currentText;
 

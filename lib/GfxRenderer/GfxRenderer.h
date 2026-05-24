@@ -74,6 +74,8 @@ class GfxRenderer {
   int getScreenWidth() const;
   int getScreenHeight() const;
   void displayBuffer(HalDisplay::RefreshMode refreshMode = HalDisplay::FAST_REFRESH) const;
+  // pablohc technique: 先白再刷，圖片顯示更乾淨（兩次 FAST_REFRESH）
+  void displayBufferClean() const;
   // EXPERIMENTAL: Windowed update - display only a rectangular region
   // void displayWindow(int x, int y, int width, int height) const;
   void invertScreen() const;
@@ -100,6 +102,11 @@ class GfxRenderer {
   void drawBitmap(const Bitmap& bitmap, int x, int y, int maxWidth, int maxHeight, float cropX = 0,
                   float cropY = 0) const;
   void drawBitmap1Bit(const Bitmap& bitmap, int x, int y, int maxWidth, int maxHeight) const;
+  // 透視梯形繪圖（Flow theme 輪播用）— 從 Carousel 移植
+  void drawPerspectiveBitmap(const Bitmap& bitmap, int x, int y, int w, int hL, int hR) const;
+  // 圓角矩形外角遮罩（RoundedRaff theme 用）— 從 Carousel 移植
+  void maskRoundedRectOutsideCorners(int x, int y, int width, int height, int radius,
+                                     Color color = Color::White) const;
   void fillPolygon(const int* xPoints, const int* yPoints, int numPoints, bool state = true) const;
 
   // Text
@@ -109,6 +116,14 @@ class GfxRenderer {
                         EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
   void drawText(int fontId, int x, int y, const char* text, bool black = true,
                 EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
+  bool getTextPixelBoundsY(int fontId, const char* text, int y, int* top, int* bottom,
+                           EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
+  int getVerticalTextCellHeight(int fontId) const;
+  int getVerticalTextTopInset(int fontId) const;
+  // stage15.4: 直排文字 API（SAM 移植，支援 Unicode FE10-FE48 直排碼點 + fallback 繪製）
+  int getVerticalTextWidth(int fontId, const char* text, EpdFontFamily::Style style = EpdFontStyles::REGULAR) const;
+  void drawVerticalText(int fontId, int x, int y, const char* text, bool black = true,
+                        EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
   int getSpaceWidth(int fontId) const;
   int getTextAdvanceX(int fontId, const char* text) const;
   int getFontAscenderSize(int fontId) const;

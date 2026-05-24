@@ -7,6 +7,12 @@
 #include "RecentBooksStore.h"
 #include "components/themes/BaseTheme.h"
 #include "components/themes/lyra/LyraTheme.h"
+#include "components/themes/lyra/LyraFlowTheme.h"
+#include "components/themes/monoink/MonoInkTheme.h"
+// stage5.5/stage12.5: RoundedRaff 圓角 theme 砍掉
+// stage15: Lyra（基本款）和 Lyra3Covers（三封面）砍掉
+// stage15.11: LibraryCardTheme 砍掉、合併進 LyraFlowTheme（Flow + 卡風）
+// MonoInk: 效能優先 × 黑白強對比 theme
 
 UITheme UITheme::instance;
 
@@ -20,19 +26,11 @@ void UITheme::reload() {
   setTheme(themeType);
 }
 
-void UITheme::setTheme(CrossPointSettings::UI_THEME type) {
-  switch (type) {
-    case CrossPointSettings::UI_THEME::CLASSIC:
-      Serial.printf("[%lu] [UI] Using Classic theme\n", millis());
-      currentTheme = new BaseTheme();
-      currentMetrics = &BaseMetrics::values;
-      break;
-    case CrossPointSettings::UI_THEME::LYRA:
-      Serial.printf("[%lu] [UI] Using Lyra theme\n", millis());
-      currentTheme = new LyraTheme();
-      currentMetrics = &LyraMetrics::values;
-      break;
-  }
+void UITheme::setTheme(CrossPointSettings::UI_THEME /*type*/) {
+  // MonoInk: 效能優先 × 黑白強對比
+  Serial.printf("[%lu] [UI] Using MonoInk theme (high-contrast b/w)\n", millis());
+  currentTheme = new MonoInkTheme();
+  currentMetrics = &MonoInkMetrics::values;
 }
 
 int UITheme::getNumberOfItemsPerPage(const GfxRenderer& renderer, bool hasHeader, bool hasTabBar, bool hasButtonHints,

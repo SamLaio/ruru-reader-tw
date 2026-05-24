@@ -14,7 +14,8 @@
 class EpubReaderMenuActivity final : public ActivityWithSubactivity {
  public:
   // Menu actions available from the reader menu.
-  enum class MenuAction { SELECT_CHAPTER, GO_TO_PERCENT, ROTATE_SCREEN, GO_HOME, SYNC, SYNCY,DELETE_CACHE };
+  enum class MenuAction { SELECT_CHAPTER, GO_TO_PERCENT, ROTATE_SCREEN, GO_HOME, SYNC, SYNCY, DELETE_CACHE,
+                          BOOKMARK_LIST, ADD_BOOKMARK };  // stage12: 書籤系統
 
   explicit EpubReaderMenuActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const std::string& title,
                                   const int currentPage, const int totalPages, const int bookProgressPercent,
@@ -40,11 +41,16 @@ class EpubReaderMenuActivity final : public ActivityWithSubactivity {
   };
 
   // Fixed menu layout (order matters for up/down navigation).
+  // stage10: SYNC (KOReader) 與 SYNCY (堅果雲) 砍掉
+  // stage12: 加入書籤系統選項
   const std::vector<MenuItem> menuItems = {
-      {MenuAction::SELECT_CHAPTER, "进入章节目录"}, {MenuAction::ROTATE_SCREEN, "阅读方向"},
-      {MenuAction::GO_TO_PERCENT, "直达进度 %"},        {MenuAction::GO_HOME, "返回主页"},
-      {MenuAction::SYNC, "进度同步(koreader)"},           {MenuAction::DELETE_CACHE, "清理缓存"},
-      {MenuAction::SYNCY, "进度同步(开源阅读)"}};
+      {MenuAction::SELECT_CHAPTER, getChineseName("Enter chapter list")},
+      {MenuAction::BOOKMARK_LIST, getChineseName("Bookmark list")},
+      {MenuAction::ADD_BOOKMARK, getChineseName("Add bookmark")},
+      {MenuAction::ROTATE_SCREEN, getChineseName("Reading Orientation")},
+      {MenuAction::GO_TO_PERCENT, getChineseName("Go to percent")},
+      {MenuAction::GO_HOME, getChineseName("Go home")},
+      {MenuAction::DELETE_CACHE, getChineseName("Clear Cache")}};
 
   int selectedIndex = 0;
   bool updateRequired = false;
@@ -52,7 +58,8 @@ class EpubReaderMenuActivity final : public ActivityWithSubactivity {
   SemaphoreHandle_t renderingMutex = nullptr;
   std::string title = "Reader Menu";
   uint8_t pendingOrientation = 0;
-  const std::vector<const char*> orientationLabels = {getChineseName("Portrait"), getChineseName("Landscape CW"), "按钮在上面", getChineseName("Landscape CCW")};
+  const std::vector<const char*> orientationLabels = {getChineseName("Portrait"), getChineseName("Landscape CW"),
+                                                     getChineseName("Inverted"), getChineseName("Landscape CCW")};
   int currentPage = 0;
   int totalPages = 0;
   int bookProgressPercent = 0;

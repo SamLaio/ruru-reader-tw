@@ -3,8 +3,13 @@
 #include <FsHelpers.h>
 #include <HardwareSerial.h>
 #include <JpegToBmpConverter.h>
+#include <PngToBmpConverter.h>
 #include <SDCardManager.h>
 #include <ZipFile.h>
+
+#include <algorithm>
+#include <cctype>
+#include <cstdlib>
 
 #include "Epub/parsers/ContainerParser.h"
 #include "Epub/parsers/ContentOpfParser.h"
@@ -13,6 +18,44 @@
 
 namespace {
 constexpr bool kDisableEpubCss = true;
+constexpr int kLargeBookSpineThreshold = 500;
+constexpr size_t MAX_LAYOUT_SCAN_BYTES = 64 * 1024;
+constexpr int MAX_SPINE_LAYOUT_SCAN_COUNT = 16;
+
+class LayoutScanPrint final : public Print {
+ public:
+  std::string text;
+  size_t write(uint8_t b) override {
+    if (text.size() < MAX_LAYOUT_SCAN_BYTES) {
+      text.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(b))));
+    }
+    return 1;
+  }
+};
+
+bool detectWritingModeInText(const std::string& text, CssWritingMode& mode) {
+  size_t propPos = text.find("writing-mode");
+  while (propPos != std::string::npos) {
+    const size_t valueEnd = std::min(text.size(), propPos + static_cast<size_t>(160));
+    const std::string valueArea = text.substr(propPos, valueEnd - propPos);
+    if (valueArea.find("vertical-rl") != std::string::npos || valueArea.find("tb-rl") != std::string::npos) {
+      mode = CssWritingMode::VerticalRl;
+      return true;
+    }
+    if (valueArea.find("vertical-lr") != std::string::npos || valueArea.find("tb-lr") != std::string::npos) {
+      mode = CssWritingMode::VerticalLr;
+      return true;
+    }
+    if (valueArea.find("horizontal-tb") != std::string::npos || valueArea.find("lr-tb") != std::string::npos ||
+        valueArea.find("rl-tb") != std::string::npos) {
+      mode = CssWritingMode::HorizontalTb;
+      return true;
+    }
+    propPos = text.find("writing-mode", propPos + 12);
+  }
+
+  return false;
+}
 }
 
 bool Epub::findContentOpfFile(std::string* contentOpfFile) const {
@@ -280,6 +323,62 @@ void Epub::parseCssFiles() const {
   }
 }
 
+void Epub::scanBookWritingMode() {
+  if (scannedBookWritingMode) {
+    return;
+  }
+  scannedBookWritingMode = true;
+  bookHasWritingMode = false;
+  bookWritingMode = CssWritingMode::HorizontalTb;
+
+  if (cssParser && cssParser->hasWritingMode()) {
+    bookHasWritingMode = true;
+    bookWritingMode = cssParser->getPrimaryWritingMode();
+    Serial.printf("[%lu] [EBP] Detected writing-mode from parsed CSS\n", millis());
+    return;
+  }
+
+  auto scanItem = [this](const std::string& href, const char* sourceLabel) -> bool {
+    LayoutScanPrint scanner;
+    scanner.text.reserve(4096);
+    if (!readItemContentsToStream(href, scanner, 512) || scanner.text.empty()) {
+      return false;
+    }
+
+    CssWritingMode detectedMode = CssWritingMode::HorizontalTb;
+    if (!detectWritingModeInText(scanner.text, detectedMode)) {
+      return false;
+    }
+
+    bookHasWritingMode = true;
+    bookWritingMode = detectedMode;
+    Serial.printf("[%lu] [EBP] Detected writing-mode from %s: %s\n", millis(), sourceLabel, href.c_str());
+    return true;
+  };
+
+  for (const auto& cssPath : cssFiles) {
+    if (scanItem(cssPath, "CSS file")) {
+      return;
+    }
+  }
+
+  const int scanCount = std::min(getSpineItemsCount(), MAX_SPINE_LAYOUT_SCAN_COUNT);
+  for (int i = 0; i < scanCount; ++i) {
+    if (scanItem(getSpineItem(i).href, "spine item")) {
+      return;
+    }
+  }
+
+  // stage27: 偵測不到 writing-mode 不要假裝「書有指定橫排」
+  // 原本強制 bookHasWritingMode=true + HorizontalTb 會讓 EpubReaderActivity 認為書明確說「橫排」
+  // 結果 useBookEmbeddedStyle=1 + bookStyleVertical=false 把使用者設定的「直排」蓋掉
+  // 現在保持 bookHasWritingMode=false，沒指定的書會走 readerSettingVertical（使用者設定）
+  bookHasWritingMode = false;
+  bookWritingMode = CssWritingMode::HorizontalTb;
+  Serial.printf("[%lu] [EBP] No EPUB writing-mode declaration detected, will follow user setting\n",
+                millis());
+}
+
 // load in the meta data for the epub file
 bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
   Serial.printf("[%lu] [EBP] Loading ePub: %s\n", millis(), filepath.c_str());
@@ -296,6 +395,7 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
 
   // Try to load existing cache first
   if (bookMetadataCache->load()) {
+    largeBookMode = (bookMetadataCache->getSpineCount() > kLargeBookSpineThreshold);
     if (!effectiveSkipLoadingCss && !loadCssRulesFromCache()) {
       Serial.printf("[%lu] [EBP] Warning: CSS rules cache not found, attempting to parse CSS files\n", millis());
       // to get CSS file list
@@ -304,6 +404,12 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
         // continue anyway - book will work without CSS and we'll still load any inline style CSS
       }
       parseCssFiles();
+    }
+    // stage24: skipLoadingCss=true 表示只要 metadata（HomeActivity 載最近閱讀封面用）
+    // scanBookWritingMode 會對前 16 個 spine 做 ZIP 解壓掃寫向，多本書連續做容易 OOM 崩潰
+    // 真正開書時 EpubReaderActivity 會用 skipLoadingCss=false 再 load 一次，那時才掃
+    if (!effectiveSkipLoadingCss) {
+      scanBookWritingMode();
     }
     Serial.printf("[%lu] [EBP] Loaded ePub: %s\n", millis(), filepath.c_str());
     return true;
@@ -343,7 +449,18 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
   }
   Serial.printf("[%lu] [EBP] OPF pass completed in %lu ms\n", millis(), millis() - opfStart);
 
+  // stage8: Large Book Mode 偵測
+  // 觸發條件：spine > 500（網文常見幾千章）
+  // 大書模式跳過 TOC pass，避免首次開書卡 30+ 秒解析 ncx/nav（往往 100KB+ XML）
+  // TOC 改成「進入章節目錄頁時才解析」（lazy load）
+  largeBookMode = (bookMetadataCache->getSpineCount() > kLargeBookSpineThreshold);
+  if (largeBookMode) {
+    Serial.printf("[%lu] [EBP] LARGE BOOK MODE (spine=%d > %d): skipping TOC pass, using rough progress\n",
+                  millis(), bookMetadataCache->getSpineCount(), kLargeBookSpineThreshold);
+  }
+
   // TOC Pass - try EPUB 3 nav first, fall back to NCX
+  // stage8: 大書模式跳過 TOC pass（lazy load）
   const uint32_t tocStart = millis();
   if (!bookMetadataCache->beginTocPass()) {
     Serial.printf("[%lu] [EBP] Could not begin writing toc pass\n", millis());
@@ -352,28 +469,30 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
 
   bool tocParsed = false;
 
-  // Try EPUB 3 nav document first (preferred)
-  if (!tocNavItem.empty()) {
-    Serial.printf("[%lu] [EBP] Attempting to parse EPUB 3 nav document\n", millis());
-    tocParsed = parseTocNavFile();
-  }
-
-  // Fall back to NCX if nav parsing failed or wasn't available
-  if (!tocParsed && !tocNcxItem.empty()) {
-    Serial.printf("[%lu] [EBP] Falling back to NCX TOC\n", millis());
-    tocParsed = parseTocNcxFile();
-  }
-
-  if (!tocParsed) {
-    Serial.printf("[%lu] [EBP] Warning: Could not parse any TOC format\n", millis());
-    // Continue anyway - book will work without TOC
+  if (largeBookMode) {
+    Serial.printf("[%lu] [EBP] Skipping TOC parse in large book mode\n", millis());
+    // 仍寫一個空 TOC pass 讓 cache 結構完整（之後 lazy load 會補）
+  } else {
+    // 正常書：解析 TOC（EPUB 3 nav 優先，fallback NCX）
+    if (!tocNavItem.empty()) {
+      Serial.printf("[%lu] [EBP] Attempting to parse EPUB 3 nav document\n", millis());
+      tocParsed = parseTocNavFile();
+    }
+    if (!tocParsed && !tocNcxItem.empty()) {
+      Serial.printf("[%lu] [EBP] Falling back to NCX TOC\n", millis());
+      tocParsed = parseTocNcxFile();
+    }
+    if (!tocParsed) {
+      Serial.printf("[%lu] [EBP] Warning: Could not parse any TOC format\n", millis());
+    }
   }
 
   if (!bookMetadataCache->endTocPass()) {
     Serial.printf("[%lu] [EBP] Could not end writing toc pass\n", millis());
     return false;
   }
-  Serial.printf("[%lu] [EBP] TOC pass completed in %lu ms\n", millis(), millis() - tocStart);
+  Serial.printf("[%lu] [EBP] TOC pass completed in %lu ms (largeBookMode=%d)\n",
+                millis(), millis() - tocStart, largeBookMode);
 
   // Close the cache files
   if (!bookMetadataCache->endWrite()) {
@@ -382,8 +501,9 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
   }
 
   // Build final book.bin
+  // stage8: 大書模式跳過 ZIP cumulative size lookup（progress 改用 spine index 比例）
   const uint32_t buildStart = millis();
-  if (!bookMetadataCache->buildBookBin(filepath, bookMetadata)) {
+  if (!bookMetadataCache->buildBookBin(filepath, bookMetadata, /*quickMode=*/largeBookMode)) {
     Serial.printf("[%lu] [EBP] Could not update mappings and sizes\n", millis());
     return false;
   }
@@ -400,13 +520,106 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
     Serial.printf("[%lu] [EBP] Failed to reload cache after writing\n", millis());
     return false;
   }
+  largeBookMode = (bookMetadataCache->getSpineCount() > kLargeBookSpineThreshold);
 
   if (!effectiveSkipLoadingCss) {
     // Parse CSS files after cache reload
     parseCssFiles();
+    // stage24: 只在需要 CSS 的場景才掃寫向（避免 HomeActivity 載封面時 OOM）
+    scanBookWritingMode();
+  }
+  Serial.printf("[%lu] [EBP] Loaded ePub: %s\n", millis(), filepath.c_str());
+  return true;
+}
+
+bool Epub::ensureTocLoaded() {
+  if (!bookMetadataCache || !bookMetadataCache->isLoaded()) {
+    Serial.printf("[%lu] [EBP] ensureTocLoaded called before cache load\n", millis());
+    return false;
   }
 
-  Serial.printf("[%lu] [EBP] Loaded ePub: %s\n", millis(), filepath.c_str());
+  if (bookMetadataCache->getTocCount() > 0) {
+    return true;
+  }
+
+  if (bookMetadataCache->getSpineCount() <= kLargeBookSpineThreshold) {
+    return true;
+  }
+
+  Serial.printf("[%lu] [EBP] Lazy-loading TOC for large book: %s\n", millis(), filepath.c_str());
+
+  setupCacheDir();
+  bookMetadataCache.reset(new BookMetadataCache(cachePath));
+
+  BookMetadataCache::BookMetadata bookMetadata;
+
+  if (!bookMetadataCache->beginWrite()) {
+    Serial.printf("[%lu] [EBP] ensureTocLoaded: could not begin writing cache\n", millis());
+    return false;
+  }
+
+  if (!bookMetadataCache->beginContentOpfPass()) {
+    Serial.printf("[%lu] [EBP] ensureTocLoaded: could not begin content.opf pass\n", millis());
+    return false;
+  }
+
+  if (!parseContentOpf(bookMetadata)) {
+    Serial.printf("[%lu] [EBP] ensureTocLoaded: could not parse content.opf\n", millis());
+    return false;
+  }
+
+  if (!bookMetadataCache->endContentOpfPass()) {
+    Serial.printf("[%lu] [EBP] ensureTocLoaded: could not end content.opf pass\n", millis());
+    return false;
+  }
+
+  if (!bookMetadataCache->beginTocPass()) {
+    Serial.printf("[%lu] [EBP] ensureTocLoaded: could not begin TOC pass\n", millis());
+    return false;
+  }
+
+  bool tocParsed = false;
+  if (!tocNavItem.empty()) {
+    Serial.printf("[%lu] [EBP] ensureTocLoaded: parsing EPUB 3 nav document\n", millis());
+    tocParsed = parseTocNavFile();
+  }
+
+  if (!tocParsed && !tocNcxItem.empty()) {
+    Serial.printf("[%lu] [EBP] ensureTocLoaded: falling back to NCX TOC\n", millis());
+    tocParsed = parseTocNcxFile();
+  }
+
+  if (!tocParsed) {
+    Serial.printf("[%lu] [EBP] ensureTocLoaded: no TOC could be parsed, keeping fallback spine list\n", millis());
+  }
+
+  if (!bookMetadataCache->endTocPass()) {
+    Serial.printf("[%lu] [EBP] ensureTocLoaded: could not end TOC pass\n", millis());
+    return false;
+  }
+
+  if (!bookMetadataCache->endWrite()) {
+    Serial.printf("[%lu] [EBP] ensureTocLoaded: could not finish cache write\n", millis());
+    return false;
+  }
+
+  if (!bookMetadataCache->buildBookBin(filepath, bookMetadata, /*quickMode=*/true)) {
+    Serial.printf("[%lu] [EBP] ensureTocLoaded: could not rebuild book.bin\n", millis());
+    return false;
+  }
+
+  if (!bookMetadataCache->cleanupTmpFiles()) {
+    Serial.printf("[%lu] [EBP] ensureTocLoaded: tmp cleanup failed, ignoring\n", millis());
+  }
+
+  bookMetadataCache.reset(new BookMetadataCache(cachePath));
+  if (!bookMetadataCache->load()) {
+    Serial.printf("[%lu] [EBP] ensureTocLoaded: failed to reload cache\n", millis());
+    return false;
+  }
+
+  largeBookMode = (bookMetadataCache->getSpineCount() > kLargeBookSpineThreshold);
+  Serial.printf("[%lu] [EBP] Lazy TOC rebuild complete: %d entries\n", millis(), bookMetadataCache->getTocCount());
   return true;
 }
 
@@ -436,6 +649,12 @@ void Epub::setupCacheDir() const {
 const std::string& Epub::getCachePath() const { return cachePath; }
 
 const std::string& Epub::getPath() const { return filepath; }
+
+bool Epub::hasCssWritingMode() const { return bookHasWritingMode || scannedBookWritingMode; }
+
+CssWritingMode Epub::getCssWritingMode() const {
+  return scannedBookWritingMode ? bookWritingMode : CssWritingMode::HorizontalTb;
+}
 
 const std::string& Epub::getTitle() const {
   static std::string blank;
@@ -580,14 +799,45 @@ bool Epub::generateThumbBmp(int height) const {
     Serial.printf("[%lu] [EBP] Generated thumb BMP from JPG cover image, success: %s\n", millis(),
                   success ? "yes" : "no");
     return success;
+  } else if (coverImageHref.length() >= 4 &&
+             coverImageHref.substr(coverImageHref.length() - 4) == ".png") {
+    // 新增 PNG cover 支援（ChineseType base 原本只支援 JPG）
+    Serial.printf("[%lu] [EBP] Generating thumb BMP from PNG cover image\n", millis());
+    const auto coverPngTempPath = getCachePath() + "/.cover.png";
+
+    FsFile coverPng;
+    if (!SdMan.openFileForWrite("EBP", coverPngTempPath, coverPng)) {
+      return false;
+    }
+    readItemContentsToStream(coverImageHref, coverPng, 1024);
+    coverPng.close();
+
+    FsFile thumbBmp;
+    if (!SdMan.openFileForWrite("EBP", getThumbBmpPath(height), thumbBmp)) {
+      SdMan.remove(coverPngTempPath.c_str());
+      return false;
+    }
+    int THUMB_TARGET_WIDTH = static_cast<int>(height * 0.6);
+    int THUMB_TARGET_HEIGHT = height;
+    const bool success = PngToBmpConverter::pngFilenameTo1BitBmpStreamWithSize(
+        coverPngTempPath.c_str(), thumbBmp, THUMB_TARGET_WIDTH, THUMB_TARGET_HEIGHT);
+    thumbBmp.close();
+    SdMan.remove(coverPngTempPath.c_str());
+
+    if (!success) {
+      Serial.printf("[%lu] [EBP] Failed to generate thumb BMP from PNG cover image\n", millis());
+      SdMan.remove(getThumbBmpPath(height).c_str());
+    }
+    Serial.printf("[%lu] [EBP] Generated thumb BMP from PNG cover image, success: %s\n", millis(),
+                  success ? "yes" : "no");
+    return success;
   } else {
-    Serial.printf("[%lu] [EBP] Cover image is not a JPG, skipping thumbnail\n", millis());
+    Serial.printf("[%lu] [EBP] Cover image format unsupported (not JPG/PNG), skipping thumbnail\n", millis());
   }
 
-  // Write an empty bmp file to avoid generation attempts in the future
-  FsFile thumbBmp;
-  SdMan.openFileForWrite("EBP", getThumbBmpPath(height), thumbBmp);
-  thumbBmp.close();
+  // 修正 ChineseType base bug：原邏輯會寫空 BMP 當佔位符，
+  // 但空檔沒表頭，下次讀取會 parseHeaders 拿到隨機 width/height、然後 readNextRow short read。
+  // 改為：失敗就不寫檔，呼叫端自己判斷 path empty 或 file not exist 來避開渲染。
   return false;
 }
 
@@ -730,8 +980,12 @@ int Epub::getSpineIndexForTextReference() const {
 // Calculate progress in book (returns 0.0-1.0)
 float Epub::calculateProgress(const int currentSpineIndex, const float currentSpineRead) const {
   const size_t bookSize = getBookSize();
-  if (bookSize == 0) {
-    return 0.0f;
+  // stage8: 大書模式或還沒算 cumulative size → 用粗略 progress (spine index 比例)
+  // 避免大書 buildBookBin 階段就算所有 cumulative size 卡 30+ 秒
+  if (bookSize == 0 || largeBookMode) {
+    const int totalSpine = getSpineItemsCount();
+    if (totalSpine <= 0) return 0.0f;
+    return (static_cast<float>(currentSpineIndex) + currentSpineRead) / static_cast<float>(totalSpine);
   }
   const size_t prevChapterSize = (currentSpineIndex >= 1) ? getCumulativeSpineItemSize(currentSpineIndex - 1) : 0;
   const size_t curChapterSize = getCumulativeSpineItemSize(currentSpineIndex) - prevChapterSize;

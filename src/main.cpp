@@ -9,26 +9,30 @@
 #include <builtinFonts/all.h>
 
 #include <cstring>
+#include <functional>
 
 #include "Battery.h"
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
-#include "KOReaderCredentialStore.h"
+// stage10: KOReaderCredentialStore 砍掉
 #include "MappedInputManager.h"
 #include "RecentBooksStore.h"
 #include "activities/boot_sleep/BootActivity.h"
 #include "activities/boot_sleep/SleepActivity.h"
+#ifndef DISABLE_OPDS
 #include "activities/browser/OpdsBookBrowserActivity.h"
+#endif
 #include "activities/home/HomeActivity.h"
 #include "activities/home/MyLibraryActivity.h"
 #include "activities/home/RecentBooksActivity.h"
 #include "activities/network/CrossPointWebServerActivity.h"
 #include "activities/reader/ReaderActivity.h"
 #include "activities/settings/SettingsActivity.h"
+#include "activities/settings/BluetoothSettingsActivity.h"
 #include "activities/util/FullScreenMessageActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
-#include "activities/browser/JianGuoBrowserActivity.h"
+// stage10: JianGuoBrowserActivity 砍掉
 
 #include <BluetoothHIDManager.h>
 #include "util/ButtonNavigator.h"
@@ -42,93 +46,78 @@ GfxRenderer renderer(display);
 Activity* currentActivity;
 
 // Fonts
-EpdFont bookerly14RegularFont(&notosans_18_bold);
-EpdFont bookerly14BoldFont(&notosans_18_bold);
-EpdFont bookerly14ItalicFont(&notosans_18_bold);
-EpdFont bookerly14BoldItalicFont(&notosans_18_bold);
+EpdFont bookerly14RegularFont(&source_han_sans_tc_17_regular);
+EpdFont bookerly14BoldFont(&source_han_sans_tc_17_regular);
+EpdFont bookerly14ItalicFont(&source_han_sans_tc_17_regular);
+EpdFont bookerly14BoldItalicFont(&source_han_sans_tc_17_regular);
 EpdFontFamily bookerly14FontFamily(&bookerly14RegularFont, &bookerly14BoldFont, &bookerly14ItalicFont,
                                    &bookerly14BoldItalicFont);
 #ifndef OMIT_FONTS
-EpdFont bookerly12RegularFont(&notosans_18_bold);
-EpdFont bookerly12BoldFont(&notosans_18_bold);
-EpdFont bookerly12ItalicFont(&notosans_18_bold);
-EpdFont bookerly12BoldItalicFont(&notosans_18_bold);
+EpdFont bookerly12RegularFont(&source_han_sans_tc_17_regular);
+EpdFont bookerly12BoldFont(&source_han_sans_tc_17_regular);
+EpdFont bookerly12ItalicFont(&source_han_sans_tc_17_regular);
+EpdFont bookerly12BoldItalicFont(&source_han_sans_tc_17_regular);
 EpdFontFamily bookerly12FontFamily(&bookerly12RegularFont, &bookerly12BoldFont, &bookerly12ItalicFont,
                                    &bookerly12BoldItalicFont);
-EpdFont bookerly16RegularFont(&notosans_18_bold);
-EpdFont bookerly16BoldFont(&notosans_18_bold);
-EpdFont bookerly16ItalicFont(&notosans_18_bold);
-EpdFont bookerly16BoldItalicFont(&notosans_18_bold);
+EpdFont bookerly16RegularFont(&source_han_sans_tc_17_regular);
+EpdFont bookerly16BoldFont(&source_han_sans_tc_17_regular);
+EpdFont bookerly16ItalicFont(&source_han_sans_tc_17_regular);
+EpdFont bookerly16BoldItalicFont(&source_han_sans_tc_17_regular);
 EpdFontFamily bookerly16FontFamily(&bookerly16RegularFont, &bookerly16BoldFont, &bookerly16ItalicFont,
                                    &bookerly16BoldItalicFont);
-EpdFont bookerly18RegularFont(&notosans_18_bold);
-EpdFont bookerly18BoldFont(&notosans_18_bold);
-EpdFont bookerly18ItalicFont(&notosans_18_bold);
-EpdFont bookerly18BoldItalicFont(&notosans_18_bold);
+EpdFont bookerly18RegularFont(&source_han_sans_tc_17_regular);
+EpdFont bookerly18BoldFont(&source_han_sans_tc_17_regular);
+EpdFont bookerly18ItalicFont(&source_han_sans_tc_17_regular);
+EpdFont bookerly18BoldItalicFont(&source_han_sans_tc_17_regular);
 EpdFontFamily bookerly18FontFamily(&bookerly18RegularFont, &bookerly18BoldFont, &bookerly18ItalicFont,
                                    &bookerly18BoldItalicFont);
 
-EpdFont notosans12RegularFont(&notosans_18_bold);
-EpdFont notosans12BoldFont(&notosans_18_bold);
-EpdFont notosans12ItalicFont(&notosans_18_bold);
-EpdFont notosans12BoldItalicFont(&notosans_18_bold);
+EpdFont notosans12RegularFont(&source_han_sans_tc_17_regular);
+EpdFont notosans12BoldFont(&source_han_sans_tc_17_regular);
+EpdFont notosans12ItalicFont(&source_han_sans_tc_17_regular);
+EpdFont notosans12BoldItalicFont(&source_han_sans_tc_17_regular);
 EpdFontFamily notosans12FontFamily(&notosans12RegularFont, &notosans12BoldFont, &notosans12ItalicFont,
                                    &notosans12BoldItalicFont);
-EpdFont notosans14RegularFont(&notosans_18_bold);
-EpdFont notosans14BoldFont(&notosans_18_bold);
-EpdFont notosans14ItalicFont(&notosans_18_bold);
-EpdFont notosans14BoldItalicFont(&notosans_18_bold);
+EpdFont notosans14RegularFont(&source_han_sans_tc_17_regular);
+EpdFont notosans14BoldFont(&source_han_sans_tc_17_regular);
+EpdFont notosans14ItalicFont(&source_han_sans_tc_17_regular);
+EpdFont notosans14BoldItalicFont(&source_han_sans_tc_17_regular);
 EpdFontFamily notosans14FontFamily(&notosans14RegularFont, &notosans14BoldFont, &notosans14ItalicFont,
                                    &notosans14BoldItalicFont);
-EpdFont notosans16RegularFont(&notosans_18_bold);
-EpdFont notosans16BoldFont(&notosans_18_bold);
-EpdFont notosans16ItalicFont(&notosans_18_bold);
-EpdFont notosans16BoldItalicFont(&notosans_18_bold);
+EpdFont notosans16RegularFont(&source_han_sans_tc_17_regular);
+EpdFont notosans16BoldFont(&source_han_sans_tc_17_regular);
+EpdFont notosans16ItalicFont(&source_han_sans_tc_17_regular);
+EpdFont notosans16BoldItalicFont(&source_han_sans_tc_17_regular);
 EpdFontFamily notosans16FontFamily(&notosans16RegularFont, &notosans16BoldFont, &notosans16ItalicFont,
                                    &notosans16BoldItalicFont);
-EpdFont notosans18RegularFont(&notosans_18_bold);
-EpdFont notosans18BoldFont(&notosans_18_bold);
-EpdFont notosans18ItalicFont(&notosans_18_bold);
-EpdFont notosans18BoldItalicFont(&notosans_18_bold);
+EpdFont notosans18RegularFont(&source_han_sans_tc_17_regular);
+EpdFont notosans18BoldFont(&source_han_sans_tc_17_regular);
+EpdFont notosans18ItalicFont(&source_han_sans_tc_17_regular);
+EpdFont notosans18BoldItalicFont(&source_han_sans_tc_17_regular);
 EpdFontFamily notosans18FontFamily(&notosans18RegularFont, &notosans18BoldFont, &notosans18ItalicFont,
                                    &notosans18BoldItalicFont);
 
-EpdFont opendyslexic8RegularFont(&notosans_18_bold);
-EpdFont opendyslexic8BoldFont(&notosans_18_bold);
-EpdFont opendyslexic8ItalicFont(&notosans_18_bold);
-EpdFont opendyslexic8BoldItalicFont(&notosans_18_bold);
-EpdFontFamily opendyslexic8FontFamily(&opendyslexic8RegularFont, &opendyslexic8BoldFont, &opendyslexic8ItalicFont,
-                                      &opendyslexic8BoldItalicFont);
-EpdFont opendyslexic10RegularFont(&notosans_18_bold);
-EpdFont opendyslexic10BoldFont(&notosans_18_bold);
-EpdFont opendyslexic10ItalicFont(&notosans_18_bold);
-EpdFont opendyslexic10BoldItalicFont(&notosans_18_bold);
-EpdFontFamily opendyslexic10FontFamily(&opendyslexic10RegularFont, &opendyslexic10BoldFont, &opendyslexic10ItalicFont,
-                                       &opendyslexic10BoldItalicFont);
-EpdFont opendyslexic12RegularFont(&notosans_18_bold);
-EpdFont opendyslexic12BoldFont(&notosans_18_bold);
-EpdFont opendyslexic12ItalicFont(&notosans_18_bold);
-EpdFont opendyslexic12BoldItalicFont(&notosans_18_bold);
-EpdFontFamily opendyslexic12FontFamily(&opendyslexic12RegularFont, &opendyslexic12BoldFont, &opendyslexic12ItalicFont,
-                                       &opendyslexic12BoldItalicFont);
-EpdFont opendyslexic14RegularFont(&notosans_18_bold);
-EpdFont opendyslexic14BoldFont(&notosans_18_bold);
-EpdFont opendyslexic14ItalicFont(&notosans_18_bold);
-EpdFont opendyslexic14BoldItalicFont(&notosans_18_bold);
-EpdFontFamily opendyslexic14FontFamily(&opendyslexic14RegularFont, &opendyslexic14BoldFont, &opendyslexic14ItalicFont,
-                                       &opendyslexic14BoldItalicFont);
+// stage12.5: OpenDyslexic 字型砍掉（給閱讀障礙者用的英文字型，台灣不用）
 #endif  // OMIT_FONTS
 
-EpdFont smallFont(&ubuntu_10_bold);
+// UI 字型替換為 Source Han Sans TC（思源黑體 TC 子集，含繁中/簡中/英文 UI）
+// SMALL_FONT / UI_10 用 10pt，UI_12 用 12pt。
+EpdFont smallFont(&source_han_sans_tc_10_regular);
 EpdFontFamily smallFontFamily(&smallFont);
 
-EpdFont ui10RegularFont(&ubuntu_10_bold);
-EpdFont ui10BoldFont(&ubuntu_10_bold);
+EpdFont ui10RegularFont(&source_han_sans_tc_10_regular);
+EpdFont ui10BoldFont(&source_han_sans_tc_10_regular);  // 子集目前只產 Regular，Bold slot 共用
 EpdFontFamily ui10FontFamily(&ui10RegularFont, &ui10BoldFont);
 
-EpdFont ui12RegularFont(&ubuntu_10_bold);
-EpdFont ui12BoldFont(&ubuntu_10_bold);
+EpdFont ui12RegularFont(&source_han_sans_tc_12_regular);
+EpdFont ui12BoldFont(&source_han_sans_tc_12_regular);
 EpdFontFamily ui12FontFamily(&ui12RegularFont, &ui12BoldFont);
+
+// stage15.54: 17pt 書名 / reader 專用思源黑體 TC 常用字集子集
+//            供 LibraryCard / LyraFlow / RecentBooks grid 顯示書名時使用
+EpdFont reader17RegularFont(&source_han_sans_tc_17_regular);
+EpdFont reader17BoldFont(&source_han_sans_tc_17_regular);
+EpdFontFamily reader17FontFamily(&reader17RegularFont, &reader17BoldFont);
 
 
 // measurement of power button press duration calibration value
@@ -246,10 +235,21 @@ void enterDeepSleep() {
 void onGoHome();
 void onGoToMyLibraryWithPath(const std::string& path);
 void onGoToRecentBooks();
-void onGoToReader(const std::string& initialEpubPath) {
+void onGoToReader(const std::string& initialEpubPath, const bool returnToLibraryOnBack = false,
+                  const std::function<void()>& onReaderBack = onGoHome) {
+  try {
+    auto& btMgr = BluetoothHIDManager::getInstance();
+    if (btMgr.isEnabled()) {
+      btMgr.releaseTransientCaches();
+    }
+  } catch (...) {
+    Serial.printf("[%lu] [BT ] Failed to release BLE caches before reader\n", millis());
+  }
+
   exitActivity();
   enterNewActivity(
-      new ReaderActivity(renderer, mappedInputManager, initialEpubPath, onGoHome, onGoToMyLibraryWithPath));
+      new ReaderActivity(renderer, mappedInputManager, initialEpubPath, onReaderBack, onGoToMyLibraryWithPath,
+                         returnToLibraryOnBack));
 }
 
 void onGoToFileTransfer() {
@@ -264,32 +264,51 @@ void onGoToSettings() {
 
 void onGoToMyLibrary() {
   exitActivity();
-  enterNewActivity(new MyLibraryActivity(renderer, mappedInputManager, onGoHome, onGoToReader));
+  enterNewActivity(new MyLibraryActivity(renderer, mappedInputManager, onGoHome,
+                                         [](const std::string& path) { onGoToReader(path, true); }));
 }
 
 void onGoToRecentBooks() {
   exitActivity();
-  enterNewActivity(new RecentBooksActivity(renderer, mappedInputManager, onGoHome, onGoToReader));
+  enterNewActivity(new RecentBooksActivity(renderer, mappedInputManager, onGoHome,
+                                           [](const std::string& path) {
+                                             onGoToReader(path, false, onGoToRecentBooks);
+                                           }));
 }
 
 void onGoToMyLibraryWithPath(const std::string& path) {
   exitActivity();
-  enterNewActivity(new MyLibraryActivity(renderer, mappedInputManager, onGoHome, onGoToReader, path));
+  enterNewActivity(new MyLibraryActivity(renderer, mappedInputManager, onGoHome,
+                                         [](const std::string& p) { onGoToReader(p, true); }, path));
 }
 
 void onGoToBrowser() {
+#ifndef DISABLE_OPDS
   exitActivity();
   enterNewActivity(new OpdsBookBrowserActivity(renderer, mappedInputManager, onGoHome));
+#endif
 }
+// stage10: 堅果雲砍掉，留空 callback 讓 HomeActivity 簽名不變
 void onGoToJianGuoYun() {
+  // no-op
+}
+
+void onGoToBluetooth() {
   exitActivity();
-  enterNewActivity(new JianGuoBrowserActivity(renderer, mappedInputManager, onGoHome));
+  enterNewActivity(new BluetoothSettingsActivity(renderer, mappedInputManager, onGoHome));
 }
 
 void onGoHome() {
   exitActivity();
-  enterNewActivity(new HomeActivity(renderer, mappedInputManager, onGoToReader, onGoToMyLibrary, onGoToRecentBooks,
-                                    onGoToSettings, onGoToFileTransfer, onGoToBrowser,onGoToJianGuoYun));
+  enterNewActivity(new HomeActivity(renderer, mappedInputManager,
+                                    [](const std::string& path) { onGoToReader(path); },
+                                    onGoToMyLibrary, onGoToRecentBooks,
+                                    onGoToSettings, onGoToFileTransfer,
+                                    onGoToBluetooth,
+#ifndef DISABLE_OPDS
+                                    onGoToBrowser,
+#endif
+                                    onGoToJianGuoYun));
 }
 
 void setupDisplayAndFonts() {
@@ -306,11 +325,10 @@ void setupDisplayAndFonts() {
   renderer.insertFont(NOTOSANS_14_FONT_ID, notosans14FontFamily);
   renderer.insertFont(NOTOSANS_16_FONT_ID, notosans16FontFamily);
   renderer.insertFont(NOTOSANS_18_FONT_ID, notosans18FontFamily);
-  renderer.insertFont(OPENDYSLEXIC_8_FONT_ID, opendyslexic8FontFamily);
-  renderer.insertFont(OPENDYSLEXIC_10_FONT_ID, opendyslexic10FontFamily);
-  renderer.insertFont(OPENDYSLEXIC_12_FONT_ID, opendyslexic12FontFamily);
-  renderer.insertFont(OPENDYSLEXIC_14_FONT_ID, opendyslexic14FontFamily);
+  // stage12.5: OpenDyslexic 字型砍掉（不再 insertFont）
 #endif  // OMIT_FONTS
+  // stage15.2: 17pt 書名專用字型
+  renderer.insertFont(READER_17_FONT_ID, reader17FontFamily);
   renderer.insertFont(UI_10_FONT_ID, ui10FontFamily);
   renderer.insertFont(UI_12_FONT_ID, ui12FontFamily);
   renderer.insertFont(SMALL_FONT_ID, smallFontFamily);
@@ -349,40 +367,17 @@ void setup() {
   }
 
   SETTINGS.loadFromFile();
-  KOREADER_STORE.loadFromFile();
+  // stage10: KOREADER_STORE 砍掉
   UITheme::getInstance().reload();
 
   ButtonNavigator::setMappedInputManager(mappedInputManager);
   
-  // Initialize Bluetooth HID button injection
+  // Initialize Bluetooth HID button injection only (no auto-enable on boot to preserve heap for EPUB)
   try {
     auto& btMgr = BluetoothHIDManager::getInstance();
     btMgr.setButtonInjector([](uint8_t buttonIndex) {
       gpio.injectButtonPress(buttonIndex);
     });
-    
-    // Enable Bluetooth on boot if configured
-    if (SETTINGS.bluetoothEnabled) {
-      if (btMgr.enable()) {
-        Serial.printf("MAIN", "Bluetooth enabled on boot");
-
-        // Auto-reconnect: attempt to connect to the last paired device up to 3 times
-        std::string lastAddr, lastName;
-        btMgr.startScan(2000);
-        if (btMgr.loadLastConnectedDevice(lastAddr, lastName)) {
-          Serial.printf("MAIN", "Auto-connecting to last device %s (%s)", lastName.c_str(), lastAddr.c_str());
-          if (btMgr.connectToDeviceWithRetries(lastAddr, 1)) {
-            Serial.printf("MAIN", "Auto-connect successful");
-          } else {
-            Serial.printf("MAIN", "Auto-connect failed after retries");
-          }
-        }
-
-      } else {
-        Serial.printf("MAIN", "Failed to enable Bluetooth on boot");
-      }
-    }
-    
     Serial.printf("MAIN", "Bluetooth HID initialized with button injection");
   } catch (...) {
     Serial.printf("MAIN", "Failed to initialize Bluetooth HID");
@@ -430,9 +425,8 @@ void setup() {
         Serial.printf("home1\n");
     onGoHome();
   } else {
-    // Clear app state to avoid getting into a boot loop if the epub doesn't load
+    // Keep openEpubPath for Flow/recent display after waking. readerActivityLoadCount is the boot-loop guard.
     const auto path = APP_STATE.openEpubPath;
-    APP_STATE.openEpubPath = "";
     APP_STATE.readerActivityLoadCount++;
     APP_STATE.saveToFile();
     Serial.printf("reader\n");
@@ -456,7 +450,9 @@ void loop() {
     // Check for Bluetooth inactivity timeouts and auto-reconnect
   try {
     BluetoothHIDManager::getInstance().updateActivity();
-    BluetoothHIDManager::getInstance().checkAutoReconnect();
+    if (!(currentActivity && currentActivity->isReaderActivity())) {
+      BluetoothHIDManager::getInstance().checkAutoReconnect();
+    }
   } catch (...) {
     // Ignore errors in Bluetooth management
   }

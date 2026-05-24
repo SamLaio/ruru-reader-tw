@@ -2,6 +2,7 @@
 
 #include <GfxRenderer.h>
 
+#include "LanguageMapper.h"
 #include "MappedInputManager.h"
 #include "fontIds.h"
 
@@ -85,14 +86,14 @@ void TxtReaderChapterSelectionActivity::loop() {
       if (page < 1) page = 1; // 页码保底
       selectorIndex = (page - 1) * total; // 选中当前页第一个章节
       updateRequired = true;
-      Serial.printf("[ChapterSkip] ✅ 点击向前100章 | 当前page：%d\n", page);
+      Serial.printf("[ChapterSkip] ✅ 點選向前100章 | 當前page：%d\n", page);
     }
     // 点击「向后100章」选项
     else if (selectorIndex == ITEM_SKIP_100_FORWARD) {
       page += PAGE_OFFSET_100_CHAPTER;
       selectorIndex = page * total - 1; // 选中当前页最后一个章节
       updateRequired = true;
-      Serial.printf("[ChapterSkip] ✅ 点击向后100章 | 当前page：%d\n", page);
+      Serial.printf("[ChapterSkip] ✅ 點選向後100章 | 當前page：%d\n", page);
     }
     // 原有章节确认逻辑
     else {
@@ -192,7 +193,7 @@ void TxtReaderChapterSelectionActivity::renderScreen() {
   }
 
   const auto pageWidth = renderer.getScreenWidth();
-  renderer.drawCenteredText(UI_12_FONT_ID, 15, "目  录", true, EpdFontFamily::BOLD);
+  renderer.drawCenteredText(UI_12_FONT_ID, 15, getChineseName("Spaced table of contents"), true, EpdFontFamily::BOLD);
 
   size_t chapterOffset = 0;
   if (this->txt != nullptr) {
@@ -206,7 +207,7 @@ void TxtReaderChapterSelectionActivity::renderScreen() {
   const int BASE_Y_CHAPTER = 80;    // 章节列表起始Y（两个选项占2行）
 
   // ========== 步骤1：绘制顶部「向前100章」选项 ==========
-  std::string skipBackText = "【向前100章】";
+  std::string skipBackText = getChineseName("Skip back 100 chapters");
   int skipBackY = BASE_Y_SPECIAL;
   if (ITEM_SKIP_100_BACK == selectorIndex) {
   renderer.fillRect(10, skipBackY, 150, FIX_LINE_HEIGHT);
@@ -218,7 +219,7 @@ void TxtReaderChapterSelectionActivity::renderScreen() {
   //renderer.drawText(UI_10_FONT_ID, 20, skipBackY, skipBackText.c_str(), selectorIndex != ITEM_SKIP_100_BACK);
 
   // ========== 步骤2：绘制顶部「向后100章」选项 ==========
-  std::string skipForwardText = "【向后100章】";
+  std::string skipForwardText = getChineseName("Skip forward 100 chapters");
   int skipForwardY = BASE_Y_SPECIAL;
   if (ITEM_SKIP_100_FORWARD == selectorIndex) {
   renderer.fillRect(200, skipBackY, 150, FIX_LINE_HEIGHT);
@@ -243,7 +244,7 @@ void TxtReaderChapterSelectionActivity::renderScreen() {
       title[sizeof(title)-1] = '\0';
       //暴力修复空白
       if(strlen(title) == 0){
-          Serial.printf("[%lu] [TRC] 章节标题为空，主动修复\n", millis());
+          Serial.printf("[%lu] [TRC] 章節標題為空，主動修復\n", millis());
           txt->parseChapterIndexAndOffset(pagebegin);
           size_t currOffset = this->txt->getChapterOffsetByIndex(i);
           std::string dirTitle = this->txt->getChapterTitleByIndex(i);
@@ -264,7 +265,7 @@ void TxtReaderChapterSelectionActivity::renderScreen() {
         //renderer.drawRect(0, drawY, 480, FIX_LINE_HEIGHT);
         renderer.drawText(UI_10_FONT_ID, 20, drawY, title, 1);
       }
-      //Serial.printf("[%lu] [TRC] 查看为啥不匹配：i:%d,selectorIndex: %d \n", millis(),i,selectorIndex);
+      //Serial.printf("[%lu] [TRC] 檢視為啥不匹配：i:%d,selectorIndex: %d \n", millis(),i,selectorIndex);
   }
 
   renderer.displayBuffer();

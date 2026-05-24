@@ -1,3 +1,6 @@
+#ifndef DISABLE_OPDS
+
+#ifndef DISABLE_CALIBRE
 #include "CalibreSettingsActivity.h"
 
 #include <GfxRenderer.h>
@@ -155,10 +158,10 @@ void CalibreSettingsActivity::render() {
   const auto pageWidth = renderer.getScreenWidth();
 
   // Draw header
-  renderer.drawCenteredText(UI_12_FONT_ID, 15, "OPDS 浏览器", true, EpdFontFamily::BOLD);
+  renderer.drawCenteredText(UI_12_FONT_ID, 15, "OPDS 瀏覽器", true, EpdFontFamily::BOLD);
 
   // Draw info text about Calibre
-  renderer.drawCenteredText(UI_10_FONT_ID, 40, "配置calibre的OPDS服务器地址和认证信息", false);
+  renderer.drawCenteredText(UI_10_FONT_ID, 40, "配置calibre的OPDS伺服器地址和認證資訊", false);
 
   // Draw selection highlight
   renderer.fillRect(0, 70 + selectedIndex * 30 - 2, pageWidth - 1, 30);
@@ -189,3 +192,6 @@ void CalibreSettingsActivity::render() {
 
   renderer.displayBuffer();
 }
+#endif
+
+#endif  // DISABLE_OPDS

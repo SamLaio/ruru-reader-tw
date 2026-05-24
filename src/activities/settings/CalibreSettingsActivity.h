@@ -1,4 +1,6 @@
 #pragma once
+#ifndef DISABLE_OPDS
+
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #include <freertos/task.h>
@@ -34,3 +36,5 @@ class CalibreSettingsActivity final : public ActivityWithSubactivity {
   void render();
   void handleSelection();
 };
+
+#endif  // DISABLE_OPDS
