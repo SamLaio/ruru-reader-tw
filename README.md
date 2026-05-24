@@ -136,7 +136,8 @@ Download failures show the HTTP status code (e.g. `Download failed: HTTP 404`) f
 | :--- | :--- | :--- | :--- |
 | iDal-10822 | Works | Works, keycode `0x4E` | Daily driver |
 | E1 Control | Works | Works, keycode `0x4B` | Backup |
-| HBTR003-XT | Unstable | - | RPA instability; iDal / E1 recommended |
+| HBTR003-XT | Works | Works | Stable after stage7-9 BT fixes (RPA / addrType / heap) |
+| Keykey mini | Works | Works | — |
 
 ### Large EPUB compatibility
 
@@ -255,7 +256,7 @@ ruru-reader-tw/
 | OPDS catalog | Only walks root → category → books (3 levels) | No OPDS 1.2 catalog discovery |
 | OTA update | Removed in stage29 | Use USB flashing; saves 127 KB flash |
 | Reader fonts | Subset by point size (10/12/17pt) | Rare characters may be missing; upload custom `.epdfont` to fill |
-| BT page-turner | Only iDal-10822 / E1 Control field-tested | Other models may need keycode profile changes |
+| BT page-turner | Field-tested with iDal-10822 / E1 Control / HBTR003-XT / Keykey mini | Other models may need keycode profile changes |
 
 ## Acknowledgments
 
