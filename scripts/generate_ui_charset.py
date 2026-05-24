@@ -6,6 +6,7 @@ from build_ui_fonts import (
     UI_CHARSET,
     UI_CHARSET_MERGED,
     UI_CHARSET_READER,
+    load_external_charset,
     load_common_charset,
     scan_language_mapper_chars,
     scan_ui_chars,
@@ -17,8 +18,9 @@ from build_ui_fonts import (
 def main():
     ui_chars = scan_ui_chars() | scan_language_mapper_chars()
     common_chars = load_common_charset()
+    external_common_chars = load_external_charset()
     ui_display_chars = strip_line_breaks("".join(ui_chars | common_chars))
-    external_chars = strip_line_breaks("".join(ui_chars | common_chars))
+    external_chars = strip_line_breaks("".join(ui_chars | external_common_chars))
     reader_chars = strip_line_breaks("".join(ui_chars | common_chars))
 
     CHARSETS_DIR.mkdir(parents=True, exist_ok=True)

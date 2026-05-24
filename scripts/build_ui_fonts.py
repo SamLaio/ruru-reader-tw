@@ -42,6 +42,7 @@ UI_CHARSET_MERGED = CHARSETS_DIR / "ui_charset_merged.txt"
 UI_CHARSET_READER = CHARSETS_DIR / "ui_charset_reader.txt"
 FULL_CHARSET = CHARSETS_DIR / "charset_full.txt"
 COMMON_CHARSET = CHARSETS_DIR / "ui_charset_common7000.txt"
+EDU_CHARSET = CHARSETS_DIR / "_edu4808.txt"
 HASH_CACHE = ROOT / ".pio" / "ui_font_charset.hash"  # 上次 build 用的 charset hash
 
 FONT_SOURCE = ROOT / "lib" / "EpdFont" / "builtinFonts" / "source" / "SourceHanSansTC"
@@ -59,6 +60,122 @@ CHINESE_RANGE = re.compile(r"[一-鿿]")
 STRING_PATTERN = re.compile(r'"((?:[^"\\\n]|\\.)*)"')
 LANGUAGE_ENTRY_PATTERN = re.compile(r'\{"((?:[^"\\\n]|\\.)*)",\s*"((?:[^"\\\n]|\\.)*)",\s*"((?:[^"\\\n]|\\.)*)",\s*"((?:[^"\\\n]|\\.)*)"\}')
 
+COMMON_EXTERNAL_SYMBOLS = (
+    "‧／＼｜～＠＃＄％＆＊＋－＝＿"
+    "．，。？！：；、"
+    "「」『』（）()《》〈〉【】[]〔〕"
+    "‐‑–—―−─━⸺⸻…"
+)
+
+VERTICAL_REQUIRED_CHARS = (
+    ",.!?:;()[]{}|'\""
+    "，、。？！：；「」『』（）〔〕【】《》〈〉｛｝［］｜“”‘’…‐‑–—―−─━⸺⸻‖"
+    "︐︑︒︓︔︕︖︙︱︳︴︵︶︷︸︹︺︻︼︽︾︿﹀﹁﹂﹃﹄﹇﹈"
+)
+
+VERTICAL_REQUIRED_INTERVALS = [
+    (0x3000, 0x303F),  # CJK Symbols and Punctuation
+    (0xFE10, 0xFE1F),  # Vertical Forms
+    (0xFE30, 0xFE4F),  # CJK Compatibility Forms
+    (0xFF00, 0xFFEF),  # Halfwidth and Fullwidth Forms
+]
+
+
+def is_cjk_common_char(ch):
+    cp = ord(ch)
+    return 0x4E00 <= cp <= 0x9FFF
+
+
+def decode_double_byte_charset(encoding, lead_range, trail_ranges):
+    chars = set()
+    for lead in lead_range:
+        for trail_range in trail_ranges:
+            for trail in trail_range:
+                try:
+                    decoded = bytes((lead, trail)).decode(encoding)
+                except UnicodeDecodeError:
+                    continue
+                for ch in decoded:
+                    if is_cjk_common_char(ch):
+                        chars.add(ch)
+    return chars
+
+
+def collect_common_external_chars():
+    """Add common Big5/GB2312 chars for book titles, filenames, OPDS metadata."""
+    chars = set(COMMON_EXTERNAL_SYMBOLS)
+    chars.update(decode_double_byte_charset("gb2312", range(0xB0, 0xD8), [range(0xA1, 0xFF)]))
+    chars.update(decode_double_byte_charset("big5", range(0xA4, 0xC7), [range(0x40, 0x7F), range(0xA1, 0xFF)]))
+    return chars
+
+
+def collect_vertical_required_chars():
+    chars = set(VERTICAL_REQUIRED_CHARS)
+    for start, end in VERTICAL_REQUIRED_INTERVALS:
+        chars.update(chr(cp) for cp in range(start, end + 1))
+    return chars
+
+
+def decode_c_escape(value):
+    if "\\" not in value:
+        return value
+
+    replacements = {
+        r"\\": "\\",
+        r"\"": "\"",
+        r"\n": "\n",
+        r"\r": "\r",
+        r"\t": "\t",
+        r"\0": "",
+    }
+    for source, target in replacements.items():
+        value = value.replace(source, target)
+    return value
+
+
+def extract_cpp_strings(text):
+    strings = []
+    i = 0
+    length = len(text)
+
+    while i < length:
+        if text.startswith("R\"", i):
+            delimiter_start = i + 2
+            paren = text.find("(", delimiter_start)
+            if paren == -1:
+                i += 2
+                continue
+            delimiter = text[delimiter_start:paren]
+            end_marker = ")" + delimiter + "\""
+            end = text.find(end_marker, paren + 1)
+            if end == -1:
+                i = paren + 1
+                continue
+            strings.append(text[paren + 1:end])
+            i = end + len(end_marker)
+            continue
+
+        if text[i] == "\"":
+            i += 1
+            buf = []
+            escaped = False
+            while i < length:
+                ch = text[i]
+                if escaped:
+                    buf.append("\\" + ch)
+                    escaped = False
+                elif ch == "\\":
+                    escaped = True
+                elif ch == "\"":
+                    break
+                else:
+                    buf.append(ch)
+                i += 1
+            strings.append(decode_c_escape("".join(buf)))
+        i += 1
+
+    return strings
+
 
 def scan_ui_chars():
     """掃 src/ 所有 .cpp/.h 中的中文字串字面量"""
@@ -72,8 +189,7 @@ def scan_ui_chars():
             text = path.read_text(encoding="utf-8")
         except Exception:
             continue
-        for match in STRING_PATTERN.finditer(text):
-            s = match.group(1)
+        for s in extract_cpp_strings(text):
             for ch in s:
                 if CHINESE_RANGE.match(ch):
                     charset.add(ch)
@@ -82,15 +198,22 @@ def scan_ui_chars():
 
 def scan_language_mapper_chars():
     """額外掃 LanguageMapper 三語表，英文與符號也納入 UI 字集。"""
-    mapper = SRC / "LanguageMapper.h"
+    mapper = SRC / "LanguageMapper.cpp"
     charset = set()
     if not mapper.exists():
         return charset
     text = mapper.read_text(encoding="utf-8")
-    for match in LANGUAGE_ENTRY_PATTERN.finditer(text):
-        for group_index in range(1, 5):
-            for ch in match.group(group_index):
-                if ch.isprintable() and ch not in {"\n", "\r"}:
+    match = re.search(r"static const LanguageMapEntry LANGUAGE_MAP\[\] = \{(.*?)\n\};", text, re.S)
+    if not match:
+        return charset
+
+    strings = extract_cpp_strings(match.group(1))
+    for index in range(0, len(strings) - 3, 4):
+        for snippet in strings[index + 1:index + 4]:
+            for ch in snippet:
+                if ch == "\t":
+                    ch = " "
+                if ch == "\n" or (not ch.isspace() and ch.isprintable()):
                     charset.add(ch)
     return charset
 
@@ -104,9 +227,23 @@ def load_full_charset():
 
 def load_common_charset():
     """載入常用字集（給 UI / 外部文字 / reader 用）"""
+    chars = set()
     if COMMON_CHARSET.exists():
-        return strip_line_breaks(COMMON_CHARSET.read_text(encoding="utf-8"))
+        chars.update(strip_line_breaks(COMMON_CHARSET.read_text(encoding="utf-8")))
+    if EDU_CHARSET.exists():
+        chars.update(ch for ch in strip_line_breaks(EDU_CHARSET.read_text(encoding="utf-8")) if is_cjk_common_char(ch))
+
+    chars.update(collect_vertical_required_chars())
+    if chars:
+        return chars
     return load_full_charset()
+
+
+def load_external_charset():
+    """載入外部文字字集：書名、檔名、OPDS metadata 需要更廣的常用字覆蓋。"""
+    chars = load_common_charset()
+    chars.update(collect_common_external_chars())
+    return chars
 
 
 def strip_line_breaks(text):
@@ -197,10 +334,12 @@ def main():
 
     # 2. 合併不同用途的字集
     common_chars = load_common_charset()
-    print(f"  Loaded {len(common_chars)} chars from common charset (for UI/external/reader text)")
+    external_common_chars = load_external_charset()
+    print(f"  Loaded {len(common_chars)} chars from common charset (for UI/reader text)")
+    print(f"  Loaded {len(external_common_chars)} chars from external charset (for filenames/metadata)")
 
     ui_display_chars = strip_line_breaks("".join(ui_chars | common_chars))
-    external_chars = strip_line_breaks("".join(ui_chars | common_chars))
+    external_chars = strip_line_breaks("".join(ui_chars | external_common_chars))
     reader_chars = strip_line_breaks("".join(ui_chars | common_chars))
     print(f"  UI display total: {len(ui_display_chars)} chars")
     print(f"  External total: {len(external_chars)} chars")

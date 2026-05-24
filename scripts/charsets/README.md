@@ -7,11 +7,11 @@
 
 | 檔案 | 字數 | 用途 |
 |------|------|------|
-| `ui_charset.txt` | 7208 | common7000 + UI 三語，給 12pt UI / 外部文字用 |
+| `ui_charset.txt` | 7390 | common7000 + UI 三語 + 直排標點，給 12pt UI 用 |
 | **`ui_charset_common7000.txt`** ⭐ | **7082** | 原始常用字集 |
-| `ui_charset_merged.txt` | 7208 | common7000 + UI 三語，保留給相容流程用 |
+| `ui_charset_merged.txt` | 8939 | 外部文字擴充字集，給 10pt 檔名 / 書名 / metadata 用 |
 | `charset_full.txt` | 11316 | 原始完整閱讀字集 |
-| `ui_charset_reader.txt` | 7208 | common7000 + UI 三語，給 17pt reader / 書名用 |
+| `ui_charset_reader.txt` | 7390 | common7000 + UI 三語 + 直排標點，給 17pt reader / 書名用 |
 | `_edu4808.txt` | 4808 | 教育部常用字 4808 字（來源） |
 | `_hanchar.json` | 8105 | 中華民國教育部「異體字字典」結構化字表（參考） |
 
@@ -32,9 +32,11 @@
 
 | 字型 | charset | 用途 |
 |------|---------|------|
-| 10pt | `ui_charset_merged.txt` | 外部文字、檔名、狀態、小字 |
+| 10pt | `ui_charset_merged.txt` | 外部文字、檔名、OPDS metadata、狀態、小字 |
 | 12pt | `ui_charset.txt` | 設定頁、標題、主要 UI |
 | 17pt | `ui_charset_reader.txt` | 書名與 reader 內文 |
+
+`ui_charset_merged.txt` 參考 `crosspoint-chinesetype` 的外部文字策略，額外納入 Big5 常用區、GB2312 常用區、常見外部符號與直排標點，提升檔名、書名、章節名與 OPDS metadata 的顯示覆蓋率。12pt UI 與 17pt reader 維持較精簡字集，避免韌體大小失控。
 
 ## 怎麼用
 
@@ -73,9 +75,9 @@ build 時自動：
 
 | 字級 | 字集 | header 大小 | bitmap bytes |
 |------|------|------------:|-------------:|
-| 10pt | common7000 + UI 三語 | 3,106,448 bytes | 355,327 |
-| 12pt | common7000 + UI 三語 | 4,170,627 bytes | 523,671 |
-| 17pt | common7000 + UI 三語 | 7,185,854 bytes | 999,982 |
+| 10pt | 外部文字擴充字集 | 3,683,437 bytes | 436,489 |
+| 12pt | common7000 + UI 三語 + 直排標點 | 4,206,342 bytes | 527,943 |
+| 17pt | common7000 + UI 三語 + 直排標點 | 7,245,442 bytes | 1,007,999 |
 
 stage15.55 BIN 為 5,614,976 bytes，Flash 使用率約 82.9%。
 
