@@ -1,3 +1,4 @@
+#ifndef DISABLE_OTA
 #include "OtaUpdater.h"
 
 #include <ArduinoJson.h>
@@ -270,3 +271,5 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate() {
   Serial.printf("[%lu] [OTA] Update completed\n", millis());
   return OK;
 }
+
+#endif  // DISABLE_OTA

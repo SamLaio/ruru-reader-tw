@@ -2,20 +2,26 @@
 
 #include <GfxRenderer.h>
 #include <HardwareSerial.h>
+#include <SDCardManager.h>
+
+#include <cstring>
 
 #include "ButtonRemapActivity.h"
+#if !defined(DISABLE_OPDS) && !defined(DISABLE_CALIBRE)
 #include "CalibreSettingsActivity.h"
+#endif
 #include "ClearCacheActivity.h"
 #include "CrossPointSettings.h"
-// stage10: KOReaderSettings 砍掉
 #include "MappedInputManager.h"
+#ifndef DISABLE_OTA
 #include "OtaUpdateActivity.h"
+#endif
 #include "components/UITheme.h"
 #include <EpdFontLoader.h>
 #include "FontSelectionActivity.h"
 #include "fontIds.h"
-// stage10: JianGuoYunSettings 砍掉
-#include "languageMapper.h"
+#include "LanguageMapper.h"
+#include "BluetoothKeymapActivity.h"
 #include "BluetoothSettingsActivity.h"
 
 #include "SettingsLists.h"
@@ -25,7 +31,38 @@
 const char* SettingsActivity::categoryNames[categoryCount] = {"Display", "Reader", "Controls", "System"};
 
 namespace {
-constexpr int changeTabsMs = 700;
+void clearTxtReaderCaches() {
+  auto root = SdMan.open("/.crosspoint");
+  if (!root || !root.isDirectory()) {
+    Serial.printf("[%lu] [SETTINGS] TXT cache directory not found\n", millis());
+    if (root) root.close();
+    return;
+  }
+
+  int clearedCount = 0;
+  int failedCount = 0;
+  char name[128];
+  for (auto file = root.openNextFile(); file; file = root.openNextFile()) {
+    file.getName(name, sizeof(name));
+    String itemName(name);
+    if (file.isDirectory() && itemName.startsWith("txt_")) {
+      String fullPath = "/.crosspoint/" + itemName;
+      file.close();
+      if (SdMan.removeDir(fullPath.c_str())) {
+        clearedCount++;
+      } else {
+        failedCount++;
+        Serial.printf("[%lu] [SETTINGS] Failed to remove TXT cache: %s\n", millis(), fullPath.c_str());
+      }
+    } else {
+      file.close();
+    }
+  }
+  root.close();
+
+  Serial.printf("[%lu] [SETTINGS] Reader settings changed, TXT cache cleared: %d removed, %d failed\n", millis(),
+                clearedCount, failedCount);
+}
 
 }  // namespace
 
@@ -37,6 +74,7 @@ void SettingsActivity::taskTrampoline(void* param) {
 void SettingsActivity::onEnter() {
   Activity::onEnter();
   renderingMutex = xSemaphoreCreateMutex();
+  readerSettingsOnEnter = captureReaderSettings();
 
   // Build per-category vectors from the shared settings list
   displaySettings.clear();
@@ -59,12 +97,16 @@ void SettingsActivity::onEnter() {
   }
 
   // Append device-only ACTION items
-  // stage10: 砍掉 KOReader Sync 與堅果雲資訊配置
   controlsSettings.insert(controlsSettings.begin(), SettingInfo::Action("Remap Front Buttons"));
   systemSettings.push_back(SettingInfo::Action("bluetooth"));
+  systemSettings.push_back(SettingInfo::Action("Bluetooth Keymap"));
+#if !defined(DISABLE_OPDS) && !defined(DISABLE_CALIBRE)
   systemSettings.push_back(SettingInfo::Action("OPDS Browser"));
+#endif
   systemSettings.push_back(SettingInfo::Action("Clear Cache"));
+#ifndef DISABLE_OTA
   systemSettings.push_back(SettingInfo::Action("Check for updates"));
+#endif
   systemSettings.push_back(SettingInfo::Action("Set Custom Font Family"));
 
 
@@ -107,25 +149,27 @@ void SettingsActivity::loop() {
     subActivity->loop();
     return;
   }
-  bool hasChangedCategory = false;
 
-  // Handle actions with early return
-  if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
-    if (selectedSettingIndex == 0) {
-      selectedCategoryIndex = (selectedCategoryIndex < categoryCount - 1) ? (selectedCategoryIndex + 1) : 0;
-      hasChangedCategory = true;
-      updateRequired = true;
-    } else {
-      toggleCurrentSetting();
-      updateRequired = true;
+  if (ignoreInputUntilClear) {
+    if (!isInputClear()) {
       return;
     }
+    ignoreInputUntilClear = false;
   }
 
   if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
     SETTINGS.saveToFile();
+    clearTxtCachesIfReaderSettingsChanged();
     EpdFontLoader::loadFontsFromSd(renderer);
     onGoHome();
+    return;
+  }
+
+  if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
+    if (selectedSettingIndex > 0) {
+      adjustCurrentSetting(1);
+      updateRequired = true;
+    }
     return;
   }
 
@@ -133,46 +177,63 @@ void SettingsActivity::loop() {
   const bool downReleased = mappedInput.wasReleased(MappedInputManager::Button::Down);
   const bool leftReleased = mappedInput.wasReleased(MappedInputManager::Button::Left);
   const bool rightReleased = mappedInput.wasReleased(MappedInputManager::Button::Right);
-  const bool changeTab = mappedInput.getHeldTime() > changeTabsMs;
 
-  // Handle navigation
-  if (upReleased && changeTab) {
-    hasChangedCategory = true;
-    selectedCategoryIndex = (selectedCategoryIndex > 0) ? (selectedCategoryIndex - 1) : (categoryCount - 1);
-    updateRequired = true;
-  } else if (downReleased && changeTab) {
-    hasChangedCategory = true;
-    selectedCategoryIndex = (selectedCategoryIndex < categoryCount - 1) ? (selectedCategoryIndex + 1) : 0;
-    updateRequired = true;
-  } else if (upReleased || leftReleased) {
+  if (upReleased) {
     selectedSettingIndex = (selectedSettingIndex > 0) ? (selectedSettingIndex - 1) : (settingsCount);
     updateRequired = true;
-  } else if (rightReleased || downReleased) {
+  } else if (downReleased) {
     selectedSettingIndex = (selectedSettingIndex < settingsCount) ? (selectedSettingIndex + 1) : 0;
     updateRequired = true;
   }
 
-  if (hasChangedCategory) {
-    selectedSettingIndex = (selectedSettingIndex == 0) ? 0 : 1;
-    switch (selectedCategoryIndex) {
-      case 0:  // Display
-        currentSettings = &displaySettings;
-        break;
-      case 1:  // Reader
-        currentSettings = &readerSettings;
-        break;
-      case 2:  // Controls
-        currentSettings = &controlsSettings;
-        break;
-      case 3:  // System
-        currentSettings = &systemSettings;
-        break;
+  if (leftReleased || rightReleased) {
+    const int direction = rightReleased ? 1 : -1;
+    if (selectedSettingIndex == 0) {
+      selectedCategoryIndex = (selectedCategoryIndex + direction + categoryCount) % categoryCount;
+      switch (selectedCategoryIndex) {
+        case 0:  // Display
+          currentSettings = &displaySettings;
+          break;
+        case 1:  // Reader
+          currentSettings = &readerSettings;
+          break;
+        case 2:  // Controls
+          currentSettings = &controlsSettings;
+          break;
+        case 3:  // System
+          currentSettings = &systemSettings;
+          break;
+      }
+      settingsCount = static_cast<int>(currentSettings->size());
+    } else {
+      adjustCurrentSetting(direction);
     }
-     settingsCount = static_cast<int>(currentSettings->size());
+    updateRequired = true;
   }
 }
 
-void SettingsActivity::toggleCurrentSetting() {
+bool SettingsActivity::isInputClear() const {
+  return !mappedInput.isPressed(MappedInputManager::Button::Back) &&
+         !mappedInput.isPressed(MappedInputManager::Button::Confirm) &&
+         !mappedInput.isPressed(MappedInputManager::Button::Left) &&
+         !mappedInput.isPressed(MappedInputManager::Button::Right) &&
+         !mappedInput.isPressed(MappedInputManager::Button::Up) &&
+         !mappedInput.isPressed(MappedInputManager::Button::Down) &&
+         !mappedInput.wasPressed(MappedInputManager::Button::Back) &&
+         !mappedInput.wasPressed(MappedInputManager::Button::Confirm) &&
+         !mappedInput.wasPressed(MappedInputManager::Button::Left) &&
+         !mappedInput.wasPressed(MappedInputManager::Button::Right) &&
+         !mappedInput.wasPressed(MappedInputManager::Button::Up) &&
+         !mappedInput.wasPressed(MappedInputManager::Button::Down) &&
+         !mappedInput.wasReleased(MappedInputManager::Button::Back) &&
+         !mappedInput.wasReleased(MappedInputManager::Button::Confirm) &&
+         !mappedInput.wasReleased(MappedInputManager::Button::Left) &&
+         !mappedInput.wasReleased(MappedInputManager::Button::Right) &&
+         !mappedInput.wasReleased(MappedInputManager::Button::Up) &&
+         !mappedInput.wasReleased(MappedInputManager::Button::Down);
+}
+
+void SettingsActivity::adjustCurrentSetting(int direction) {
   int selectedSetting = selectedSettingIndex - 1;
   if (selectedSetting < 0 || selectedSetting >= settingsCount) {
     return;
@@ -186,30 +247,37 @@ void SettingsActivity::toggleCurrentSetting() {
     SETTINGS.*(setting.valuePtr) = !currentValue;
   } else if (setting.type == SettingType::ENUM && setting.valuePtr != nullptr) {
     const uint8_t currentValue = SETTINGS.*(setting.valuePtr);
-    SETTINGS.*(setting.valuePtr) = (currentValue + 1) % static_cast<uint8_t>(setting.enumValues.size());
+    const int valueCount = static_cast<int>(setting.enumValues.size());
+    if (valueCount <= 0) {
+      return;
+    }
+    SETTINGS.*(setting.valuePtr) = static_cast<uint8_t>((currentValue + direction + valueCount) % valueCount);
 } else if (setting.type == SettingType::VALUE && setting.valuePtr != nullptr) {
-    // ========== 匹配 ValueRange 结构体的 VALUE 逻辑 ==========
-    // 1. 读取当前值（类型匹配：uint8_t，避免有符号/无符号错误）
+    // ========== 匹配 ValueRange 結構體的 VALUE 邏輯 ==========
+    // 1. 讀取當前值（型別匹配：uint8_t，避免有符號/無符號錯誤）
     const uint8_t currentValue = SETTINGS.*(setting.valuePtr); 
-    // 2. 计算新值：当前值 + 步长（改用 valueRange.step）
-    uint8_t newValue = currentValue + setting.valueRange.step;
-    // 3. 循环逻辑：超过最大值则回到最小值（改用 valueRange.min/max）
-    // 比如 40 + 5 = 45 > 40 → 重置为 0；35 + 5 = 40 ≤40 → 保留40
+    int newValue = currentValue + direction * setting.valueRange.step;
     if (newValue > setting.valueRange.max) {
         newValue = setting.valueRange.min;
-    }   
-    // 4. 写回新值（这一步是真正改变数值的核心）
-    SETTINGS.*(setting.valuePtr) = newValue;
+    } else if (newValue < setting.valueRange.min) {
+        newValue = setting.valueRange.max;
+    }
+    // 4. 寫回新值（這一步是真正改變數值的核心）
+    SETTINGS.*(setting.valuePtr) = static_cast<uint8_t>(newValue);
 } else if (setting.type == SettingType::ACTION) {
+    if (direction < 0) {
+      return;
+    }
     if (strcmp(setting.name, "Remap Front Buttons") == 0) {
       xSemaphoreTake(renderingMutex, portMAX_DELAY);
       exitActivity();
       enterNewActivity(new ButtonRemapActivity(renderer, mappedInput, [this] {
         exitActivity();
+        ignoreInputUntilClear = true;
         updateRequired = true;
       }));
       xSemaphoreGive(renderingMutex);
-    // stage10: KOReader Sync 砍掉
+#if !defined(DISABLE_OPDS) && !defined(DISABLE_CALIBRE)
     } else if (strcmp(setting.name, "OPDS Browser") == 0) {
       xSemaphoreTake(renderingMutex, portMAX_DELAY);
       exitActivity();
@@ -218,7 +286,7 @@ void SettingsActivity::toggleCurrentSetting() {
         updateRequired = true;
             }));
       xSemaphoreGive(renderingMutex);
-    // stage10: 堅果雲資訊配置 砍掉
+#endif
     } else if (strcmp(setting.name, "Clear Cache") == 0) {
       xSemaphoreTake(renderingMutex, portMAX_DELAY);
       exitActivity();
@@ -227,6 +295,7 @@ void SettingsActivity::toggleCurrentSetting() {
         updateRequired = true;
       }));
       xSemaphoreGive(renderingMutex);
+#ifndef DISABLE_OTA
     } else if (strcmp(setting.name, "Check for updates") == 0) {
       xSemaphoreTake(renderingMutex, portMAX_DELAY);
       exitActivity();
@@ -235,6 +304,7 @@ void SettingsActivity::toggleCurrentSetting() {
         updateRequired = true;
       }));
       xSemaphoreGive(renderingMutex);
+#endif
       } else if (strcmp(setting.name, "Set Custom Font Family") == 0) {
       xSemaphoreTake(renderingMutex, portMAX_DELAY);
       exitActivity();
@@ -251,6 +321,14 @@ void SettingsActivity::toggleCurrentSetting() {
         updateRequired = true;
       }));
       xSemaphoreGive(renderingMutex);
+    } else if (strcmp(setting.name, "Bluetooth Keymap") == 0) {
+      xSemaphoreTake(renderingMutex, portMAX_DELAY);
+      exitActivity();
+      enterNewActivity(new BluetoothKeymapActivity(renderer, mappedInput, [this] {
+        exitActivity();
+        updateRequired = true;
+      }));
+      xSemaphoreGive(renderingMutex);
     }
 
 
@@ -260,6 +338,57 @@ void SettingsActivity::toggleCurrentSetting() {
   }
 
   SETTINGS.saveToFile();
+}
+
+SettingsActivity::ReaderSettingsSnapshot SettingsActivity::captureReaderSettings() const {
+  ReaderSettingsSnapshot snapshot;
+  snapshot.fontFamily = SETTINGS.fontFamily;
+  snapshot.fontSize = SETTINGS.fontSize;
+  snapshot.customFontSize = SETTINGS.customFontSize;
+  strncpy(snapshot.customFontFamily, SETTINGS.customFontFamily, sizeof(snapshot.customFontFamily) - 1);
+  snapshot.customFontFamily[sizeof(snapshot.customFontFamily) - 1] = '\0';
+  snapshot.lineSpacing = SETTINGS.lineSpacing;
+  snapshot.firstlineintented = SETTINGS.firstlineintented;
+  snapshot.wordSpacing = SETTINGS.wordSpacing;
+  snapshot.screenMarginTop = SETTINGS.screenMargin_Top;
+  snapshot.screenMarginBottom = SETTINGS.screenMargin_Bottom;
+  snapshot.screenMarginLeft = SETTINGS.screenMargin_Left;
+  snapshot.screenMarginRight = SETTINGS.screenMargin_Right;
+  snapshot.extraline = SETTINGS.extraline;
+  snapshot.paragraphAlignment = SETTINGS.paragraphAlignment;
+  snapshot.textLayout = SETTINGS.textLayout;
+  snapshot.orientation = SETTINGS.orientation;
+  snapshot.extraParagraphSpacing = SETTINGS.extraParagraphSpacing;
+  snapshot.textAntiAliasing = SETTINGS.textAntiAliasing;
+  return snapshot;
+}
+
+bool SettingsActivity::readerSettingsChanged() const {
+  const auto current = captureReaderSettings();
+  return readerSettingsOnEnter.fontFamily != current.fontFamily || readerSettingsOnEnter.fontSize != current.fontSize ||
+         readerSettingsOnEnter.customFontSize != current.customFontSize ||
+         strncmp(readerSettingsOnEnter.customFontFamily, current.customFontFamily,
+                 sizeof(readerSettingsOnEnter.customFontFamily)) != 0 ||
+         readerSettingsOnEnter.lineSpacing != current.lineSpacing ||
+         readerSettingsOnEnter.firstlineintented != current.firstlineintented ||
+         readerSettingsOnEnter.wordSpacing != current.wordSpacing ||
+         readerSettingsOnEnter.screenMarginTop != current.screenMarginTop ||
+         readerSettingsOnEnter.screenMarginBottom != current.screenMarginBottom ||
+         readerSettingsOnEnter.screenMarginLeft != current.screenMarginLeft ||
+         readerSettingsOnEnter.screenMarginRight != current.screenMarginRight ||
+         readerSettingsOnEnter.extraline != current.extraline ||
+         readerSettingsOnEnter.paragraphAlignment != current.paragraphAlignment ||
+         readerSettingsOnEnter.textLayout != current.textLayout || readerSettingsOnEnter.orientation != current.orientation ||
+         readerSettingsOnEnter.extraParagraphSpacing != current.extraParagraphSpacing ||
+         readerSettingsOnEnter.textAntiAliasing != current.textAntiAliasing;
+}
+
+void SettingsActivity::clearTxtCachesIfReaderSettingsChanged() {
+  if (!readerSettingsChanged()) {
+    return;
+  }
+  clearTxtReaderCaches();
+  readerSettingsOnEnter = captureReaderSettings();
 }
 
 void SettingsActivity::displayTaskLoop() {
@@ -282,7 +411,7 @@ void SettingsActivity::render() const {
 
   auto metrics = UITheme::getInstance().getMetrics();
 
-  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, "Settings");
+  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, getChineseName("Settings"));
 
   std::vector<TabInfo> tabs;
   tabs.reserve(categoryCount);
@@ -300,35 +429,35 @@ void SettingsActivity::render() const {
           pageHeight - (metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + metrics.buttonHintsHeight +
                         metrics.verticalSpacing * 2)},
       settingsCount, selectedSettingIndex - 1, 
-      // 第一个回调：设置项名称（英文转中文）
+      // 第一個回撥：設定項名稱（英文轉中文）
       [&settings](int index) { 
-          // 核心修改：调用getChineseName转换名称
+          // 核心修改：呼叫getChineseName轉換名稱
           const char* englishName = settings[index].name;
           const char* chineseName = getChineseName(englishName);
           return std::string(chineseName); 
       },
       nullptr, nullptr,
-      // 第二个回调：设置项值（英文转中文）
+      // 第二個回撥：設定項值（英文轉中文）
       [&settings](int i) {
         std::string valueText = "";
         if (settings[i].type == SettingType::TOGGLE && settings[i].valuePtr != nullptr) {
           const bool value = SETTINGS.*(settings[i].valuePtr);
-          // 核心修改：ON/OFF 转 开启/关闭
+          // 核心修改：ON/OFF 轉 開啟/關閉
           valueText = value ? getChineseName("ON") : getChineseName("OFF");
-          // 如果你没给ON/OFF加映射，也可以直接写：valueText = value ? "開啟" : "關閉";
+          // 如果你沒給ON/OFF加對映，也可以直接寫：valueText = value ? "開啟" : "關閉";
         } else if (settings[i].type == SettingType::ENUM && settings[i].valuePtr != nullptr) {
           const uint8_t value = SETTINGS.*(settings[i].valuePtr);
-          // 核心修改：枚举值（如Tight/Normal）转中文
+          // 核心修改：列舉值（如Tight/Normal）轉中文
           const char* englishValue = settings[i].enumValues[value].c_str();
           const char* chineseValue = getChineseName(englishValue);
           valueText = chineseValue;
         } else if (settings[i].type == SettingType::VALUE && settings[i].valuePtr != nullptr) {
-          // 数值型（如5/10）无需转换，直接显示
+          // 數值型（如5/10）無需轉換，直接顯示
           valueText = std::to_string(SETTINGS.*(settings[i].valuePtr));
         } else if (settings[i].type == SettingType::ACTION &&
             strcmp(settings[i].name, "Set Custom Font Family") == 0) {
           if (SETTINGS.fontFamily == CrossPointSettings::FONT_CUSTOM) {
-            // 自定义字体名称保留原字符串（无需转换）
+            // 自定義字型名稱保留原字串（無需轉換）
             valueText = SETTINGS.customFontFamily;
           }
         }
@@ -341,7 +470,8 @@ void SettingsActivity::render() const {
                     metrics.versionTextY, CROSSPOINT_VERSION);
 
   // Draw help text
-  const auto labels = mappedInput.mapLabels(getChineseName("« Back"), getChineseName("Toggle"), getChineseName("Up"), getChineseName("Down"));
+  const auto labels = mappedInput.mapLabels(getChineseName("Back"), getChineseName("Back"), getChineseName("Previous"),
+                                            getChineseName("Next"));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   // Always use standard refresh for settings screen

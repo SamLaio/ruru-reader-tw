@@ -22,8 +22,8 @@ constexpr ThemeMetrics values = {.batteryWidth = 16,
                                  .scrollBarWidth = 4,
                                  .scrollBarRightOffset = 5,
                                  .homeTopPadding = 56,
-                                 .homeCoverHeight = 226,
-                                 .homeCoverTileHeight = 287,
+                                 .homeCoverHeight = 300,         // stage15.25: cover +25%
+                                 .homeCoverTileHeight = 480,     // stage15.25: 書名 28 + 呼吸 + cover 300 + 呼吸 + brand 52 = ~480、tile 結束 Y=536、menu 從 Y=650 開始（中間 114px 為呼吸）
                                  .homeRecentBooksCount = 3,
                                  .homeContinueReadingInMenu = false,
                                  .homeMenuTopOffset = 10,
@@ -71,7 +71,8 @@ class LyraTheme : public BaseTheme {
   void drawSideButtonHints(const GfxRenderer& renderer, const char* topBtn, const char* bottomBtn) const override;
   void drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount, int selectedIndex,
                       const std::function<std::string(int index)>& buttonLabel,
-                      const std::function<UIIcon(int index)>& rowIcon) const override;
+                      const std::function<UIIcon(int index)>& rowIcon,
+                      int sdDirCount = 0) const override;
   void drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std::vector<RecentBook>& recentBooks,
                            const int selectorIndex, bool& coverRendered, bool& coverBufferStored, bool& bufferRestored,
                            std::function<bool()> storeCoverBuffer, const BookReadingStats* stats = nullptr,

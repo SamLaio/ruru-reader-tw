@@ -593,7 +593,7 @@ void MyLibraryActivity::render() const {
   constexpr int menuSpacing = 5;
   const int menuTileWidth = (pageWidth - 2 * margin - 3 * menuSpacing) / 4;
   constexpr int menuTileHeight = 30;
-  constexpr int topMenuY = 15;
+  const int topMenuY = metrics.topPadding + metrics.headerHeight + 4;
  // 分页显示（一行3个）防止挡电源
   int startIdx = ((int)topSelectorIndex / 3) * 3;
   if (startIdx + 3 > 5) startIdx = 3;
@@ -620,7 +620,7 @@ void MyLibraryActivity::render() const {
 
 
 
-  const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
+  const int contentTop = metrics.topPadding + metrics.headerHeight + menuTileHeight + 8;
   const int contentHeight = pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing;
 
   // 核心：根据是否搜索模式，选择要显示的列表（files 或 searchResults）

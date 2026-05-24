@@ -4,6 +4,7 @@
 
 #include <algorithm>
 
+#include "LanguageMapper.h"
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -28,7 +29,7 @@ std::string makeFallbackChapterTitle(const BookMetadataCache::SpineEntry& spineE
     return label;
   }
 
-  return "章節 " + std::to_string(spineIndex + 1);
+  return std::string(getChineseName("Section ")) + std::to_string(spineIndex + 1);
 }
 }  // namespace
 
@@ -195,13 +196,14 @@ void EpubReaderChapterSelectionActivity::renderScreen() {
   const bool hasToc = epub->getTocItemsCount() > 0;
 
   // Manual centering to honor content gutters.
+  const char* titleText = hasToc ? getChineseName("Table of contents") : getChineseName("Section ");
   const int titleX =
-      contentX + (contentWidth - renderer.getTextWidth(UI_12_FONT_ID, hasToc ? "目錄" : "章節", EpdFontFamily::BOLD)) / 2;
-  renderer.drawText(UI_12_FONT_ID, titleX, 15 + contentY, hasToc ? "目錄" : "章節", true, EpdFontFamily::BOLD);
+      contentX + (contentWidth - renderer.getTextWidth(UI_12_FONT_ID, titleText, EpdFontFamily::BOLD)) / 2;
+  renderer.drawText(UI_12_FONT_ID, titleX, 15 + contentY, titleText, true, EpdFontFamily::BOLD);
 
   if (totalItems <= 0) {
-    renderer.drawText(UI_10_FONT_ID, contentX + 20, 80 + contentY, "沒有可用章節", true);
-    const auto labels = mappedInput.mapLabels("« 返回", "", "", "");
+    renderer.drawText(UI_10_FONT_ID, contentX + 20, 80 + contentY, getChineseName("No chapters available"), true);
+    const auto labels = mappedInput.mapLabels(getChineseName("« Back"), "", "", "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
     renderer.displayBuffer();
     return;
@@ -233,7 +235,8 @@ void EpubReaderChapterSelectionActivity::renderScreen() {
     renderer.drawText(UI_10_FONT_ID, indentSize, displayY, chapterName.c_str(), !isSelected);
   }
 
-  const auto labels = mappedInput.mapLabels("« 返回", "選擇", "向上", "向下");
+  const auto labels = mappedInput.mapLabels(getChineseName("« Back"), getChineseName("Select"), getChineseName("Up"),
+                                            getChineseName("Down"));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   renderer.displayBuffer();

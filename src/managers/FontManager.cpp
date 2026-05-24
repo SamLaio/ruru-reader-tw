@@ -177,7 +177,13 @@ CustomEpdFont* loadFontFile(const String& path) {
 
     is2Bit = (b8[6] != 0);
     advanceY = b8[8];
-    ascender = (int8_t)b8[9];
+    // stage15.33 (嚕寶長期修): V1 header 用 `header[9] = ascender & 0xFF` 截斷成 8-bit
+    //   fontconvert.py:396 寫 (ascender + 256) & 0xFF（負值補 256）
+    //   但 ascender 對 18pt+ 字體常常 > 127、用 (int8_t) 讀會變負值
+    //   → 文字 Y 座標 = y + ascender 變成 y - 56 → 跑出螢幕
+    //   修法：用 uint8_t 讀（0~255 範圍）、ascender 永遠正值（typographic_ascender 不會是負值）
+    //   descender 通常是負值（baseline 下方）、保留 int8_t cast 維持原行為
+    ascender = (uint8_t)b8[9];
     descender = (int8_t)b8[10];
 
     intervalCount = b8[12] | (b8[13] << 8) | (b8[14] << 16) | (b8[15] << 24);
@@ -258,6 +264,17 @@ CustomEpdFont* loadFontFile(const String& path) {
 EpdFontFamily* FontManager::getCustomFontFamily(const std::string& familyName, int fontSize) {
   if (loadedFonts[familyName][fontSize]) {
     return loadedFonts[familyName][fontSize];
+  }
+
+  // stage28: 載入新字型前先把其他字型釋放掉，避免切字型時舊+新同時佔 RAM
+  //   原本 loadedFonts 是 singleton 永不釋放，每換一次字型就累積一份在 heap
+  //   現在切到新字型時，只保留正要載入的那一個 family
+  for (auto& familyPair : loadedFonts) {
+    if (familyPair.first == familyName) continue;
+    for (auto& sizePair : familyPair.second) {
+      delete sizePair.second;
+    }
+    familyPair.second.clear();
   }
 
   String basePath = "/fonts/" + String(familyName.c_str()) + "-";

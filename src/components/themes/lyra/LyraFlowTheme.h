@@ -11,7 +11,7 @@ class GfxRenderer;
 namespace LyraFlowMetrics {
 constexpr ThemeMetrics values = [] {
   ThemeMetrics v = LyraMetrics::values;
-  v.homeCoverHeight = 320;       // 25-kai book ratio (~0.7) — center cover
+  v.homeCoverHeight = 300;       // stage15.29: 跟 LyraFlowTheme.cpp 的 centerCoverHeight=300 對齊、cache key 一致
   v.homeCoverTileHeight = 360;   // hugs the bottom of the cover so the menu sits close
   v.homeRecentBooksCount = 5;    // matches the 5 carousel slots visible at once
                                  // (center + 2 sides each direction). Capped at 5 to
@@ -43,7 +43,8 @@ class LyraFlowTheme : public LyraTheme {
   // when the cursor crosses page 2's top boundary.
   void drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount, int selectedIndex,
                       const std::function<std::string(int index)>& buttonLabel,
-                      const std::function<UIIcon(int index)>& rowIcon) const override;
+                      const std::function<UIIcon(int index)>& rowIcon,
+                      int sdDirCount = 0) const override;
 
  private:
   // Tracks "is page 2 currently shown" across renders. mutable because

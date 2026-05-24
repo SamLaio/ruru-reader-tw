@@ -7,11 +7,17 @@
 #include <Txt.h>
 #include <Xtc.h>
 
+#include <algorithm>
+#include <cctype>
+#include <string>
+#include <vector>
+
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "images/CrossLarge.h"
+#include "images/RabbitLarge.h"  // stage15.35: HelloRuru 兔子 Logo
 #include "util/StringUtils.h"
 
 
@@ -24,7 +30,36 @@ constexpr uint32_t TRANSPARENT_PXA_MAGIC = 0x31415850;  // "PXA1"
 constexpr uint16_t TRANSPARENT_PXA_VERSION = 1;
 constexpr char TRANSPARENT_WALLPAPER2_PXA[] = "/.crosspoint/transparent_wallpaper2.pxa";
 constexpr char CUSTOM_SLEEP_PXC[] = "/.crosspoint/custom_sleep.pxc";
+constexpr char READER_SLEEP_EXCERPT_PATH[] = "/.crosspoint/reader_sleep_excerpt.txt";
 constexpr uint8_t FIXED_CACHE_ORIENTATION = CrossPointSettings::ORIENTATION::PORTRAIT;
+
+std::string normalizeSleepExcerptForOverlay(const std::string& text) {
+  std::string out;
+  out.reserve(text.size());
+  bool previousSpace = true;
+  for (const char ch : text) {
+    const auto uch = static_cast<unsigned char>(ch);
+    const bool space = std::isspace(uch) != 0;
+    if (space) {
+      if (!previousSpace) {
+        out.push_back(' ');
+      }
+      previousSpace = true;
+      continue;
+    }
+    out.push_back(ch);
+    previousSpace = false;
+  }
+  while (!out.empty() && out.back() == ' ') {
+    out.pop_back();
+  }
+  return out;
+}
+
+bool isTextReaderPath(const std::string& path) {
+  return StringUtils::checkFileExtension(path, ".epub") || StringUtils::checkFileExtension(path, ".txt") ||
+         StringUtils::checkFileExtension(path, ".xtc") || StringUtils::checkFileExtension(path, ".xtch");
+}
 
 
 //通篇已经在必要部分把HALF_REFRESH改成FULL_REFRESH了，防止残影过重
@@ -149,6 +184,21 @@ bool overlayTransparentPxaToFramebuffer(const std::string& pxaPath, GfxRenderer&
   return true;
 }
 
+bool overlayTransparentWallpaperToFramebuffer(GfxRenderer& renderer) {
+  if (overlayTransparentPxaToFramebuffer(TRANSPARENT_WALLPAPER2_PXA, renderer, SETTINGS.orientation)) {
+    Serial.printf("[%lu] [SLP] Loaded transparent wallpaper PXA cache\n", millis());
+    return true;
+  }
+
+  if (SETTINGS.orientation != FIXED_CACHE_ORIENTATION &&
+      overlayTransparentPxaToFramebuffer(TRANSPARENT_WALLPAPER2_PXA, renderer, FIXED_CACHE_ORIENTATION)) {
+    Serial.printf("[%lu] [SLP] Loaded transparent wallpaper PXA cache with fixed portrait fallback\n", millis());
+    return true;
+  }
+
+  return false;
+}
+
 }  // namespace
 
 void SleepActivity::onEnter() {
@@ -182,6 +232,12 @@ void SleepActivity::onEnter() {
 
 
 void SleepActivity::renderpngtxtSleepScreen() const {
+  if (overlayTransparentWallpaperToFramebuffer(renderer)) {
+    drawReaderSleepExcerptOverlay();
+    renderer.displayBuffer(HalDisplay::FULL_REFRESH);
+    return;
+  }
+
   bool isPngtxtLoaded = false; // 标记是否成功加载PNGTXT文件
 
   // ========== 分支1：优先从 /sleep_mask 目录随机加载 .pngtxt ==========
@@ -238,6 +294,7 @@ void SleepActivity::renderpngtxtSleepScreen() const {
         
         // 绘制PNGTXT（灰阶分层绘制）
         renderer.drawPngFromTxtpng(filename.c_str());
+        drawReaderSleepExcerptOverlay();
         renderer.displayBuffer(HalDisplay::FULL_REFRESH);
 
         renderer.clearScreen(0x00);
@@ -252,6 +309,8 @@ void SleepActivity::renderpngtxtSleepScreen() const {
 
         renderer.displayGrayBuffer();
         renderer.setRenderMode(GfxRenderer::BW);
+        drawReaderSleepExcerptOverlay();
+        renderer.displayBuffer(HalDisplay::HALF_REFRESH);
         
         file.close(); // 关闭文件，避免泄漏
         isPngtxtLoaded = true; // 标记加载成功
@@ -273,6 +332,7 @@ void SleepActivity::renderpngtxtSleepScreen() const {
       
       // 绘制PNGTXT（灰阶分层绘制）
       renderer.drawPngFromTxtpng(pngtxtPath.c_str());
+      drawReaderSleepExcerptOverlay();
       renderer.displayBuffer(HalDisplay::FULL_REFRESH);
 
       renderer.clearScreen(0x00);
@@ -287,6 +347,8 @@ void SleepActivity::renderpngtxtSleepScreen() const {
 
       renderer.displayGrayBuffer();
       renderer.setRenderMode(GfxRenderer::BW);
+      drawReaderSleepExcerptOverlay();
+      renderer.displayBuffer(HalDisplay::HALF_REFRESH);
       
       txtpng_file.close(); // 关闭文件，避免泄漏
       isPngtxtLoaded = true; // 标记加载成功
@@ -388,8 +450,8 @@ void SleepActivity::renderCustomSleepScreen() const {
 
 
 void SleepActivity::renderPngSleepScreen() const {
-  if (overlayTransparentPxaToFramebuffer(TRANSPARENT_WALLPAPER2_PXA, renderer, SETTINGS.orientation)) {
-    Serial.printf("[%lu] [SLP] Loaded transparent wallpaper2 PXA cache\n", millis());
+  if (overlayTransparentWallpaperToFramebuffer(renderer)) {
+    drawReaderSleepExcerptOverlay();
     renderer.displayBuffer(HalDisplay::FULL_REFRESH);
     return;
   }
@@ -455,6 +517,7 @@ void SleepActivity::renderPngSleepScreen() const {
       // 解码并渲染PNG
       PngToFramebufferConverter pngConverter;
       if (pngConverter.decodeToFramebuffer(filename, renderer, renderConfig)) {
+        drawReaderSleepExcerptOverlay();
         renderer.displayBuffer(HalDisplay::HALF_REFRESH);
         delay(200); // 给屏幕刷新时间
         dir.close();
@@ -485,6 +548,7 @@ void SleepActivity::renderPngSleepScreen() const {
     // 解码并渲染根目录的sleep_mask.png
     PngToFramebufferConverter pngConverter;
     if (pngConverter.decodeToFramebuffer("/sleep_mask.png", renderer, renderConfig)) {
+      drawReaderSleepExcerptOverlay();
       renderer.displayBuffer(HalDisplay::FULL_REFRESH);
       delay(200);
       Serial.printf("[%lu] [SLP] Png draw completed (mode: %d)\n", millis(), renderer.getRenderMode());
@@ -496,6 +560,57 @@ void SleepActivity::renderPngSleepScreen() const {
   Serial.printf("[%lu] [SLP] No valid PNG file, keep default screen\n", millis());
 }
 
+void SleepActivity::drawReaderSleepExcerptOverlay() const {
+  if (!APP_STATE.lastSleepFromReader || APP_STATE.openEpubPath.empty() || !isTextReaderPath(APP_STATE.openEpubPath)) {
+    return;
+  }
+
+  FsFile f;
+  if (!SdMan.openFileForRead("SLP", READER_SLEEP_EXCERPT_PATH, f)) {
+    return;
+  }
+
+  char buffer[512];
+  const int bytesRead = f.read(buffer, sizeof(buffer) - 1);
+  f.close();
+  if (bytesRead <= 0) {
+    return;
+  }
+  buffer[bytesRead] = '\0';
+
+  const std::string payload(buffer);
+  const size_t separator = payload.find('\n');
+  if (separator == std::string::npos) {
+    return;
+  }
+
+  std::string sourcePath = payload.substr(0, separator);
+  if (!sourcePath.empty() && sourcePath.back() == '\r') {
+    sourcePath.pop_back();
+  }
+  if (sourcePath != APP_STATE.openEpubPath) {
+    return;
+  }
+
+  const std::string excerpt = normalizeSleepExcerptForOverlay(payload.substr(separator + 1));
+  if (excerpt.empty()) {
+    return;
+  }
+
+  const int pageWidth = renderer.getScreenWidth();
+  const int pageHeight = renderer.getScreenHeight();
+  const int sidePadding = 24;
+  const int overlayHeight = 62;
+  const int overlayY = std::max(0, pageHeight - overlayHeight - 24);
+  const int textY = overlayY + 22;
+  const int maxTextWidth = std::max(1, pageWidth - sidePadding * 2);
+  const std::string line = renderer.truncatedText(UI_10_FONT_ID, excerpt.c_str(), maxTextWidth);
+
+  renderer.fillRect(0, overlayY - 8, pageWidth, overlayHeight + 16, false);
+  renderer.drawLine(sidePadding, overlayY - 8, pageWidth - sidePadding, overlayY - 8, 2, true);
+  renderer.drawText(UI_10_FONT_ID, sidePadding, textY, line.c_str(), true, EpdFontFamily::REGULAR);
+}
+
 
 
 
@@ -504,9 +619,10 @@ void SleepActivity::renderDefaultSleepScreen() const {
   const auto pageHeight = renderer.getScreenHeight();
 
   renderer.clearScreen();
-  renderer.drawImage(CrossLarge, (pageWidth - 128) / 2, (pageHeight - 128) / 2, 128, 128);
-  renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 + 70, "CrossPoint", true, EpdFontFamily::BOLD);
-  renderer.drawCenteredText(SMALL_FONT_ID, pageHeight / 2 + 95, "SLEEPING");
+  // stage15.35 (嚕寶改 sleep 畫面): 兔子 + RURU-READER + 休眠中
+  renderer.drawImage(RabbitLarge, (pageWidth - 128) / 2, (pageHeight - 128) / 2, 128, 128);
+  renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 + 70, "RURU-READER", true, EpdFontFamily::BOLD);
+  renderer.drawCenteredText(SMALL_FONT_ID, pageHeight / 2 + 95, "休眠中...");
 
   // Make sleep screen dark unless light is selected in settings
   if (SETTINGS.sleepScreen != CrossPointSettings::SLEEP_SCREEN_MODE::LIGHT) {
@@ -569,6 +685,7 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap) const {
     renderer.invertScreen();
   }
 
+  drawReaderSleepExcerptOverlay();
   renderer.displayBuffer(HalDisplay::HALF_REFRESH);
 
   if (hasGreyscale) {
@@ -586,6 +703,8 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap) const {
 
     renderer.displayGrayBuffer();
     renderer.setRenderMode(GfxRenderer::BW);
+    drawReaderSleepExcerptOverlay();
+    renderer.displayBuffer(HalDisplay::HALF_REFRESH);
   }
 }
 

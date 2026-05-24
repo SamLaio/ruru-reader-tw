@@ -2,6 +2,7 @@
 
 #include <GfxRenderer.h>
 
+#include "LanguageMapper.h"
 #include "MappedInputManager.h"
 #include "fontIds.h"
 #include "Xtc.h"
@@ -53,7 +54,8 @@ void XtcReaderChapterSelectionActivity::onEnter() {
     default:
       break;
   };
-
+ 
+  renderingMutex = xSemaphoreCreateMutex();
 
   updateRequired = true;
   //循环找所在章节
@@ -73,9 +75,16 @@ void XtcReaderChapterSelectionActivity::onExit() {
   Activity::onExit();
   renderer.setOrientation(GfxRenderer::Orientation::Portrait);
 
+  if (renderingMutex) {
+    xSemaphoreTake(renderingMutex, portMAX_DELAY);
+  }
   if (displayTaskHandle) {
     vTaskDelete(displayTaskHandle);
     displayTaskHandle = nullptr;
+  }
+  if (renderingMutex) {
+    vSemaphoreDelete(renderingMutex);
+    renderingMutex = nullptr;
   }
 }
 
@@ -125,7 +134,9 @@ void XtcReaderChapterSelectionActivity::displayTaskLoop() {
   while (true) {
     if (updateRequired) {
       updateRequired = false;
+      xSemaphoreTake(renderingMutex, portMAX_DELAY);
       renderScreen();
+      xSemaphoreGive(renderingMutex);
     }
     vTaskDelay(10 / portTICK_PERIOD_MS);
   }
@@ -143,7 +154,7 @@ void XtcReaderChapterSelectionActivity::renderScreen() {
   }
 
   const auto pageWidth = renderer.getScreenWidth();
-  renderer.drawCenteredText(UI_12_FONT_ID, 15, "目錄", true, EpdFontFamily::BOLD);
+  renderer.drawCenteredText(UI_12_FONT_ID, 15, getChineseName("Table of contents"), true, EpdFontFamily::BOLD);
 
   const int FIX_LINE_HEIGHT = 29;
   const int BASE_Y = 60;

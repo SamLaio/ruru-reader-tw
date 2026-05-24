@@ -1,7 +1,9 @@
 #pragma once
 
 #include <GfxRenderer.h>
+#ifndef DISABLE_QR_CODE
 #include <qrcode.h>
+#endif
 
 #include <string>
 
@@ -27,6 +29,7 @@ constexpr uint8_t DEFAULT_PX = 6;
  */
 inline void drawQRCode(const GfxRenderer& renderer, const int x, const int y, const std::string& data,
                        const uint8_t px = DEFAULT_PX) {
+#ifndef DISABLE_QR_CODE
   QRCode qrcode;
   uint8_t qrcodeBytes[qrcode_getBufferSize(4)];
   qrcode_initText(&qrcode, qrcodeBytes, 4, ECC_LOW, data.c_str());
@@ -37,6 +40,12 @@ inline void drawQRCode(const GfxRenderer& renderer, const int x, const int y, co
       }
     }
   }
+#else
+  const int size = px * QR_MODULES;
+  renderer.drawRect(x, y, size, size);
+  renderer.fillRect(x + size / 2 - px, y + size / 2 - px, px * 2, px * 2, true);
+  (void)data;
+#endif
 }
 
 /**

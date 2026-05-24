@@ -4,6 +4,7 @@
 #include <WiFi.h>
 #include <esp_wifi.h>
 
+#include <BluetoothHIDManager.h>
 #include "NetworkConstants.h"
 #include "html/TextInputPageHtml.generated.h"
 
@@ -34,6 +35,13 @@ bool KeyboardWebInputServer::start() {
   } else {
     // Start our own Access Point
     Serial.printf("[%lu] [KB-WEB] No WiFi connection, starting AP...\n", millis());
+
+    auto& btMgr = BluetoothHIDManager::getInstance();
+    if (btMgr.isEnabled()) {
+      Serial.printf("[%lu] [KB-WEB] Disabling Bluetooth before AP start\n", millis());
+      btMgr.disable();
+      delay(100);
+    }
 
     WiFi.mode(WIFI_AP);
     delay(100);

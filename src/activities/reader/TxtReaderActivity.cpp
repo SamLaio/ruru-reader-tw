@@ -5,12 +5,15 @@
 #include <Serialization.h>
 #include <Utf8.h>
 
+#include <cctype>
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
+#include "LanguageMapper.h"
 #include "MappedInputManager.h"
 #include "RecentBooksStore.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/AtomicFileWriter.h"
 
 #include "TxtReaderChapterSelectionActivity.h"
 
@@ -19,10 +22,104 @@ constexpr unsigned long goHomeMs = 1000;
 constexpr int statusBarMargin = 20;
 constexpr int progressBarMarginTop = 1;
 constexpr size_t CHUNK_SIZE = 8 * 1024;  // 8KB chunk for reading
+constexpr char READER_SLEEP_EXCERPT_PATH[] = "/.crosspoint/reader_sleep_excerpt.txt";
 
 // Cache file magic and version
 constexpr uint32_t CACHE_MAGIC = 0x54585449;  // "TXTI"
-constexpr uint8_t CACHE_VERSION = 3;          // Increment when cache format changes
+constexpr uint8_t CACHE_VERSION = 4;          // Increment when cache format changes
+
+std::string normalizeSleepExcerptLine(const std::string& text) {
+  std::string out;
+  out.reserve(text.size());
+  bool previousSpace = true;
+  for (const char ch : text) {
+    const auto uch = static_cast<unsigned char>(ch);
+    const bool space = std::isspace(uch) != 0;
+    if (space) {
+      if (!previousSpace) {
+        out.push_back(' ');
+      }
+      previousSpace = true;
+      continue;
+    }
+    out.push_back(ch);
+    previousSpace = false;
+  }
+  while (!out.empty() && out.back() == ' ') {
+    out.pop_back();
+  }
+  return out;
+}
+
+int readerVerticalSpacingPx(const uint8_t wordSpacing) {
+  return static_cast<int>(wordSpacing) * 2;
+}
+
+int verticalLineGap() {
+  return std::max(0, static_cast<int>(SETTINGS.verticalLineOffset));
+}
+
+int utf8CharBytes(const char* p) {
+  const unsigned char c = static_cast<unsigned char>(*p);
+  if ((c & 0x80) == 0) return 1;
+  if ((c & 0xE0) == 0xC0) return 2;
+  if ((c & 0xF0) == 0xE0) return 3;
+  if ((c & 0xF8) == 0xF0) return 4;
+  return 1;
+}
+
+void drawVerticalDashedLine(GfxRenderer& renderer, const int x, int y1, int y2) {
+  int startY = std::min(y1, y2);
+  int endY = std::max(y1, y2);
+  int currentY = startY;
+  constexpr int actualDash = 20;
+  constexpr int actualGap = 10;
+
+  while (currentY < endY) {
+    const int segmentEndY = std::min(currentY + actualDash, endY);
+    renderer.drawLine(x, currentY, x, segmentEndY, true);
+    currentY = segmentEndY + actualGap;
+  }
+}
+
+int getVerticalCharsPerPage(const int viewportWidth, const int viewportHeight, const int lineHeight,
+                            const uint8_t wordSpacing) {
+  const int charAdvance = lineHeight + readerVerticalSpacingPx(wordSpacing);
+  const int charsPerCol = (viewportHeight > 0 && charAdvance > 0) ? viewportHeight / charAdvance : 1;
+  const int colsPerPage = (viewportWidth > 0 && lineHeight > 0) ? viewportWidth / lineHeight : 1;
+  return std::max(1, charsPerCol) * std::max(1, colsPerPage);
+}
+
+int getVerticalEffectiveCharHeight(GfxRenderer& renderer, const int fontId, const float lineCompression) {
+  const int fontLineHeight = renderer.getLineHeight(fontId);
+  const int visualHeight = renderer.getVerticalTextCellHeight(fontId);
+  const int compressedLineHeight = static_cast<int>(fontLineHeight * lineCompression);
+  return std::max(visualHeight, visualHeight + (compressedLineHeight - fontLineHeight));
+}
+
+void applyVerticalColumnAlignment(std::vector<int>& yPositions, const int lineHeight, const int charAdvance,
+                                  const int viewportHeight, const uint8_t alignment, const bool allowJustify) {
+  if (yPositions.empty()) return;
+  const int contentBottom = yPositions.back() + lineHeight;
+  const int spare = viewportHeight - contentBottom;
+  if (spare <= 0) return;
+
+  if (alignment == CrossPointSettings::CENTER_ALIGN || alignment == CrossPointSettings::RIGHT_ALIGN) {
+    const int offset = alignment == CrossPointSettings::CENTER_ALIGN ? spare / 2 : spare;
+    for (auto& y : yPositions) {
+      y = std::min(viewportHeight - lineHeight, y + offset);
+    }
+    return;
+  }
+
+  if (alignment == CrossPointSettings::JUSTIFIED && allowJustify && yPositions.size() > 1) {
+    const int firstY = yPositions.front();
+    const int gapCount = static_cast<int>(yPositions.size()) - 1;
+    for (size_t i = 0; i < yPositions.size(); i++) {
+      yPositions[i] = firstY + static_cast<int>(i) * charAdvance + (spare * static_cast<int>(i)) / gapCount;
+    }
+  }
+}
 
 }  // namespace
 
@@ -147,17 +244,24 @@ void TxtReaderActivity::loop() {
 
   // When long-press chapter skip is disabled, turn pages on press instead of release.
   const bool usePressForPageTurn = !SETTINGS.longPressChapterSkip;
+  // stage15.4: 直排翻頁反轉（中文古書方向）
+  //   verticalPageReverse = 0（預設）→ 跟橫排同：Left = prev、Right = next
+  //   verticalPageReverse = 1（古書）→ 直排時：Left = next、Right = prev
+  const bool reverseDir = (SETTINGS.textLayout == CrossPointSettings::TEXT_VERTICAL) && SETTINGS.verticalPageReverse;
+  const auto leftBtn = reverseDir ? MappedInputManager::Button::Right : MappedInputManager::Button::Left;
+  const auto rightBtn = reverseDir ? MappedInputManager::Button::Left : MappedInputManager::Button::Right;
+
   const bool prevTriggered = usePressForPageTurn ? (mappedInput.wasPressed(MappedInputManager::Button::PageBack) ||
-                                                    mappedInput.wasPressed(MappedInputManager::Button::Left))
+                                                    mappedInput.wasPressed(leftBtn))
                                                  : (mappedInput.wasReleased(MappedInputManager::Button::PageBack) ||
-                                                    mappedInput.wasReleased(MappedInputManager::Button::Left));
+                                                    mappedInput.wasReleased(leftBtn));
   const bool powerPageTurn = SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::PAGE_TURN &&
                              mappedInput.wasReleased(MappedInputManager::Button::Power);
   const bool nextTriggered = usePressForPageTurn
                                  ? (mappedInput.wasPressed(MappedInputManager::Button::PageForward) || powerPageTurn ||
-                                    mappedInput.wasPressed(MappedInputManager::Button::Right))
+                                    mappedInput.wasPressed(rightBtn))
                                  : (mappedInput.wasReleased(MappedInputManager::Button::PageForward) || powerPageTurn ||
-                                    mappedInput.wasReleased(MappedInputManager::Button::Right));
+                                    mappedInput.wasReleased(rightBtn));
 
   if (!prevTriggered && !nextTriggered) {
     return;
@@ -259,7 +363,14 @@ void TxtReaderActivity::chapter_initializeReader(int chapter_num) {
   //行距加这里？
   float lineHeight = renderer.getLineHeight(cachedFontId)* SETTINGS.getReaderLineCompression();
 
-  linesPerPage = viewportHeight / lineHeight;
+  if (SETTINGS.textLayout == CrossPointSettings::TEXT_VERTICAL) {
+    const int verticalCharHeight =
+        getVerticalEffectiveCharHeight(renderer, cachedFontId, SETTINGS.getReaderLineCompression());
+    linesPerPage = getVerticalCharsPerPage(viewportWidth, viewportHeight, verticalCharHeight,
+                                           SETTINGS.wordSpacing);
+  } else {
+    linesPerPage = viewportHeight / lineHeight;
+  }
   if (linesPerPage < 1) linesPerPage = 1;
 
   Serial.printf("[%lu] [TRS] Viewport: %dx%d, lines per page: %d (chapter %d)\n", millis(), viewportWidth, viewportHeight,
@@ -331,7 +442,7 @@ void TxtReaderActivity::buildPageIndex(size_t beginByte, size_t endByte) {
   Serial.printf("[%lu] [TRS] Building page index from %zu to %zu bytes...\n", 
                 millis(), beginByte, endByte);
 
-  GUI.drawPopup(renderer, "Indexing...");
+  GUI.drawPopup(renderer, getChineseName("Indexing..."));
 
   // 3. 循环终止条件改为：offset < endByte
   while (offset < endByte) {
@@ -393,6 +504,32 @@ bool TxtReaderActivity::loadPageAtOffset(size_t offset,size_t endOffset, std::ve
 
   // Parse lines from buffer
   size_t pos = 0;
+
+  if (SETTINGS.textLayout == CrossPointSettings::TEXT_VERTICAL) {
+    std::string pageText;
+    int units = 0;
+    while (pos < chunkSize && units < linesPerPage) {
+      const char* p = reinterpret_cast<const char*>(buffer + pos);
+      int len = utf8CharBytes(p);
+      if (pos + len > chunkSize) {
+        break;
+      }
+      unsigned char c = buffer[pos];
+      if (c == '\r' || c == '\n') {
+        pos += len;
+        continue;
+      }
+      pageText.append(p, len);
+      pos += len;
+      units++;
+    }
+    nextOffset = offset + pos;
+    if (!pageText.empty()) {
+      outLines.push_back(std::move(pageText));
+    }
+    free(buffer);
+    return !outLines.empty();
+  }
 
   // 首行缩进控制变量
   const std::string indentStr = "\xe2\x80\x83\xe2\x80\x83"; // 两个全角空格
@@ -564,9 +701,74 @@ void TxtReaderActivity::renderPage() {
 
   float lineHeight = renderer.getLineHeight(cachedFontId)* SETTINGS.getReaderLineCompression();
   const int contentWidth = viewportWidth;
+  // stage15.4: 直排切換（嚕寶設定 textLayout = TEXT_VERTICAL）
+  //            原則：數據層不動，currentPageLines 還是橫排切出的內容
+  //                  排版層自己決定要橫排還是直排畫
+  const bool useVertical = (SETTINGS.textLayout == CrossPointSettings::TEXT_VERTICAL);
 
   // Render text lines with alignment
   auto renderLines = [&]() {
+    if (useVertical) {
+      // stage15.8 升級：直排合所有 currentPageLines、按 viewportH 重切欄、塞滿不爆
+      //                避免每行一欄塞不滿的問題（跟 EPUB 直排同手法）
+      const int colWidth = static_cast<int>(lineHeight);
+      const int verticalCharHeight =
+          getVerticalEffectiveCharHeight(renderer, cachedFontId, SETTINGS.getReaderLineCompression());
+      const int charAdvance = verticalCharHeight + readerVerticalSpacingPx(SETTINGS.wordSpacing);
+      const int topInset = renderer.getVerticalTextTopInset(cachedFontId);
+      const int viewportH = renderer.getScreenHeight() - orientedMarginTop - orientedMarginBottom;
+      const int charsPerCol = (viewportH > 0 && charAdvance > 0) ? viewportH / charAdvance : 1;
+      if (charsPerCol < 1) return;
+      const int maxCols = (contentWidth > 0 && colWidth > 0) ? contentWidth / colWidth : 1;
+      if (maxCols < 1) return;
+
+      // 合所有行成單一字串（stage15.10 修：不在行間插空格、中文不需要會段落間出現怪空格）
+      std::string allText;
+      for (const auto& line : currentPageLines) {
+        if (line.empty()) continue;
+        allText += line;
+      }
+
+      // 按 charsPerCol 切欄、從最右往左畫
+      const char* p = allText.c_str();
+      int x = orientedMarginLeft + contentWidth - colWidth;
+      int colCount = 0;
+      while (*p && colCount < maxCols) {
+        if (x < orientedMarginLeft) break;
+        if (SETTINGS.extraline) {
+          drawVerticalDashedLine(renderer, x - verticalLineGap() - 1, orientedMarginTop,
+                                 orientedMarginTop + viewportH);
+        }
+        int y = 0;
+        int count = 0;
+        std::vector<std::string> colUnits;
+        colUnits.reserve(charsPerCol);
+        std::vector<int> yPositions;
+        yPositions.reserve(charsPerCol);
+        while (*p && count < charsPerCol) {
+          int len = utf8CharBytes(p);
+          for (int i = 0; i < len; i++) {
+            if (!p[i]) { len = i; break; }
+          }
+          if (len == 0) break;
+          colUnits.emplace_back(p, len);
+          yPositions.push_back(y);
+          p += len;
+          y += charAdvance;
+          count++;
+        }
+        if (count == 0) break;
+        applyVerticalColumnAlignment(yPositions, static_cast<int>(lineHeight), charAdvance, viewportH,
+                                     cachedParagraphAlignment, *p != '\0');
+        for (size_t i = 0; i < colUnits.size(); i++) {
+          renderer.drawVerticalText(cachedFontId, x, orientedMarginTop + yPositions[i] - topInset,
+                                    colUnits[i].c_str());
+        }
+        x -= colWidth;
+        colCount++;
+      }
+      return;
+    }
     int y = orientedMarginTop;
     for (const auto& line : currentPageLines) {
       if (!line.empty()) {
@@ -651,7 +853,7 @@ void TxtReaderActivity::renderScreen() {
 
   if (pageOffsets.empty()) {
     renderer.clearScreen();
-    renderer.drawCenteredText(UI_12_FONT_ID, 300, "Empty file", true, EpdFontFamily::BOLD);
+    renderer.drawCenteredText(UI_12_FONT_ID, 300, getChineseName("Empty file"), true, EpdFontFamily::BOLD);
     renderer.displayBuffer();
     return;
   }
@@ -670,6 +872,7 @@ void TxtReaderActivity::renderScreen() {
     endoffset = txt->getFileSize();
   }
   loadPageAtOffset(offset,endoffset, currentPageLines, nextOffset);
+  saveSleepExcerptFromCurrentLines();
 
   renderer.clearScreen();
   renderPage();
@@ -678,6 +881,32 @@ void TxtReaderActivity::renderScreen() {
 }
 
 
+
+void TxtReaderActivity::saveSleepExcerptFromCurrentLines() const {
+  if (!txt) {
+    return;
+  }
+
+  std::string excerpt;
+  excerpt.reserve(192);
+  for (const auto& rawLine : currentPageLines) {
+    const std::string line = normalizeSleepExcerptLine(rawLine);
+    if (line.empty()) {
+      continue;
+    }
+    if (!excerpt.empty()) {
+      excerpt.push_back(' ');
+    }
+    excerpt += line;
+    if (excerpt.size() >= 180) {
+      break;
+    }
+  }
+
+  SdMan.mkdir("/.crosspoint");
+  const std::string payload = txt->getPath() + "\n" + excerpt;
+  writeTextFileAtomic("TRS", READER_SLEEP_EXCERPT_PATH, payload);
+}
 
 void TxtReaderActivity::renderStatusBar(const int orientedMarginRight, const int orientedMarginBottom,
                                         const int orientedMarginTop, const int orientedMarginLeft) const {
@@ -767,21 +996,17 @@ void TxtReaderActivity::renderStatusBar(const int orientedMarginRight, const int
 }
 
 void TxtReaderActivity::saveProgress() const {
+  uint8_t data[8];
+  data[0] = currentPage & 0xFF;
+  data[1] = (currentPage >> 8) & 0xFF;
+  data[2] = 0;
+  data[3] = 0;
 
-  FsFile f;
-  if (SdMan.openFileForWrite("TRS", txt->getCachePath() + "/progress.bin", f)) {
-    uint8_t data[8];
-    data[0] = currentPage & 0xFF;
-    data[1] = (currentPage >> 8) & 0xFF;
-    data[2] = 0;
-    data[3] = 0;
-
-    data[4] = chapternum & 0xFF;
-    data[5] = (chapternum >> 8) & 0xFF;
-    data[6] = 0;
-    data[7] = 0;
-    f.write(data, 8);
-    f.close();
+  data[4] = chapternum & 0xFF;
+  data[5] = (chapternum >> 8) & 0xFF;
+  data[6] = 0;
+  data[7] = 0;
+  if (writeBinaryFileAtomic("TRS", txt->getCachePath() + "/progress.bin", data, sizeof(data))) {
     Serial.printf("[%lu] [TRS] saveed progress: page %d/%d, chapter %d\n", millis(), currentPage, totalPages, chapternum);
   }
 }
@@ -914,6 +1139,14 @@ bool TxtReaderActivity::chapter_loadPageIndexCache(int chapternum) {
     return false;
   }
 
+  uint8_t textLayout;
+  serialization::readPod(f, textLayout);
+  if (textLayout != SETTINGS.textLayout) {
+    Serial.printf("[%lu] [TRS] Cache text layout mismatch, rebuilding\n", millis());
+    f.close();
+    return false;
+  }
+
   uint32_t numPages;
   serialization::readPod(f, numPages);
 
@@ -955,6 +1188,7 @@ void TxtReaderActivity::chapter_savePageIndexCache(int chapternum) const {
   //结束
   serialization::writePod(f, static_cast<int32_t>(cachedScreenMargin));
   serialization::writePod(f, cachedParagraphAlignment);
+  serialization::writePod(f, SETTINGS.textLayout);
   serialization::writePod(f, static_cast<uint32_t>(pageOffsets.size()));
 
   // Write page offsets

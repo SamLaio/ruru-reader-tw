@@ -1,4 +1,5 @@
 #pragma once
+#ifndef DISABLE_OTA
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #include <freertos/task.h>
@@ -43,3 +44,5 @@ class OtaUpdateActivity : public ActivityWithSubactivity {
   void loop() override;
   bool preventAutoSleep() override { return state == CHECKING_FOR_UPDATE || state == UPDATE_IN_PROGRESS; }
 };
+
+#endif  // DISABLE_OTA
