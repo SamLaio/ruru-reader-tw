@@ -122,10 +122,24 @@ def write_charset(path, charset):
 
 
 def charset_hash(charset):
-    """計算 charset 的 hash（給 incremental build 判斷用）"""
+    """計算 charset 的 hash（給 incremental build 判斷用）
+
+    stage32 修 race condition：hash 包含輸入檔指紋，避免下列場景跳過 extract：
+      - 換完整 header（譬如 TC 版 → CJK 全版）
+      - 改 extract_glyphs.py 邏輯
+
+    OUTPUT_HEADER 不放進來（會被自己 extract 寫過 → mtime 自我變動 → 永遠 mismatch）。
+    """
     h = hashlib.sha256()
     for ch in sorted(charset):
         h.update(ch.encode("utf-8"))
+    # 只算「輸入指紋」：完整 header xz + extract_glyphs.py
+    for path in [FULL_HEADER_XZ, EXTRACT_SCRIPT]:
+        try:
+            st = path.stat()
+            h.update(f"\0{path.name}={st.st_size}:{int(st.st_mtime_ns)}".encode())
+        except FileNotFoundError:
+            h.update(f"\0{path.name}=MISSING".encode())
     return h.hexdigest()
 
 
