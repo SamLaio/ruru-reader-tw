@@ -7,7 +7,7 @@
   <img src="https://img.shields.io/badge/license-MIT_%2B_PolyForm_NC-D4A5A5?style=flat-square" alt="Dual License">
   <img src="https://img.shields.io/badge/platform-ESP32--C3-B8A9C9?style=flat-square" alt="ESP32-C3">
   <img src="https://img.shields.io/badge/font-Source_Han_Sans_TC-A8B5A0?style=flat-square" alt="Source Han Sans TC">
-  <img src="https://img.shields.io/badge/stage-15.55-E8B4B8?style=flat-square" alt="Stage 15.55">
+  <img src="https://img.shields.io/badge/stage-15.48-E8B4B8?style=flat-square" alt="Stage 15.48">
 </p>
 
 <p align="center">
@@ -17,7 +17,7 @@
 ---
 
 > **雙重授權聲明** — 上游 code 維持 MIT（可商用）。
-> HelloRuru 從 stage 8 到 stage 15.55 的修改採用 PolyForm Noncommercial 1.0.0。
+> HelloRuru 從 stage 8 到 stage 15.48 的修改採用 PolyForm Noncommercial 1.0.0。
 > HelloRuru 修改部分的商業使用需另外取得授權，請洽 <hello@helloruru.com>。
 > 詳見 [LICENSE](LICENSE)。
 
@@ -49,11 +49,7 @@
 
 | 版本 | 適用 | 檔案 | SHA256 |
 | :--- | :--- | :--- | :--- |
-| **stage15.55** | 最新測試版；10pt 小字裝回、17pt reader 維持 common7000 瘦身 | `ruru-reader-tw-stage15.55-20260516.bin` | `769CF856121216142441B462BC2D7B1F2677F051CE0C53DE27F5F1EDCAABDE37` |
-| **stage15.54** | 最新測試版；12pt UI 共用常用字集、17pt reader 改回 common7000 瘦身 | `ruru-reader-tw-stage15.54-20260516.bin` | `1D51CBC6CDB682779711FE9816A4ACDBA620F6FB6AA30CD726578EF982903938` |
-| **stage15.50** | 最新測試版；透明桌布回到 EPUB/TXT 閱讀頁 | `ruru-reader-tw-stage15.50-20260515.bin` | `845D9AED8FB914171BF2F450473CE990B09F598FF8D21E2E0896947779C7D020` |
-| **stage15.49** | Reader 改用完整閱讀字集，降低閱讀缺字 | `ruru-reader-tw-stage15.49-20260515.bin` | `C25449CB258825034ABAFE6386B29B1C984553A61D7EEEF64366549E0C2EF8ED` |
-| **stage15.48** | 思源黑體、UI 多語系、藍芽 disable 修補 | `ruru-reader-tw-stage15.48-20260515.bin` | `66CA892D997A5CE967007F3A978891F4F40440E1F8E48EA9FD34267DEB4ED9AC` |
+| **stage15.48** | 最新測試版；思源黑體、UI 多語系、藍芽 disable 修補 | `ruru-reader-tw-stage15.48-20260515.bin` | `66CA892D997A5CE967007F3A978891F4F40440E1F8E48EA9FD34267DEB4ED9AC` |
 | **stage15.46** | 最新已確認可用基準版 | `ruru-reader-tw-stage15.46-20260515.bin` | `90E4B8F2A194D3D8B4B32A018F124B8017871FD4D91831F1D59BFC0377F4166B` |
 
 ### 2. 用網頁燒錄
@@ -64,7 +60,7 @@
 
 ```bash
 esptool.py --chip esp32c3 --port /dev/ttyUSB0 --baud 921600 \
-  write_flash -z 0x10000 release/ruru-reader-tw-stage15.55-20260516.bin
+  write_flash -z 0x10000 release/ruru-reader-tw-stage15.48-20260515.bin
 ```
 
 ### 4. 第一次開機
@@ -74,20 +70,7 @@ esptool.py --chip esp32c3 --port /dev/ttyUSB0 --baud 921600 \
 3. 掃描，選翻頁器，連線。
 4. 之後每次開機會依設定恢復。
 
-> 升級 stage15 系列後，建議刪除 SD 卡 `.crosspoint/`，讓書籍 cache 重建。設定檔會保留；stage15.55 設定檔版本為 `9`，新增語言欄位，預設繁中。
-
-## 休眠與透明桌布
-
-透明桌布分成兩種來源：
-
-| 用途 | 來源 |
-| :--- | :--- |
-| 圖片選單「設為透明桌布」 | 產生 `/.crosspoint/transparent_wallpaper2.pxa` |
-| 休眠透明桌布備援 | SD 卡 `/sleep_mask/` 內的 `.png`，或根目錄 `/sleep_mask.png` |
-
-EPUB/TXT 閱讀頁在「閱讀背景」開啟時，會優先套用 `/.crosspoint/transparent_wallpaper2.pxa`；沒有 `.pxa` 時才回到一般閱讀背景 `/.crosspoint/wallpaper_bg.pxc`。
-
-`/sleep_mask/` 不是必填資料夾。只有當你沒有從圖片選單存成 `.pxa`，但想讓休眠透明桌布隨機讀 PNG 時，才需要建立。
+> 升級 stage15 系列後，建議刪除 SD 卡 `.crosspoint/`，讓書籍 cache 重建。設定檔會保留；stage15.48 設定檔版本為 `9`，新增語言欄位，預設繁中。
 
 ## 實機驗證
 
@@ -125,7 +108,7 @@ scripts/generate_ui_font_subset.py
 
 1. 掃描 `src/` 內的 UI 字串。
 2. 從 `LanguageMapper` 讀取繁中、簡中、英文介面文字。
-3. 產生 `scripts/charsets/ui_charset.txt`、`scripts/charsets/ui_charset_merged.txt` 與 `scripts/charsets/ui_charset_reader.txt`。
+3. 產生 `scripts/charsets/ui_charset.txt` 與 `scripts/charsets/ui_charset_merged.txt`。
 4. 使用 Source Han Sans TC / 思源黑體 TC 來源字型產生子集。
 5. 重寫以下內建字型 header：
 
@@ -140,16 +123,16 @@ lib/EpdFont/builtinFonts/source_han_sans_tc_17_regular.h
 | 字級 | 用途 | 字集 |
 | :--- | :--- | :--- |
 | 10pt | 外部文字、檔名、狀態、小字 | common7000 + UI 三語 |
-| 12pt | 設定頁、標題、主要 UI | common7000 + UI 三語 |
+| 12pt | 設定頁、標題、主要 UI | 純 UI 三語 |
 | 17pt | 書名與 reader 內文 | common7000 + UI 三語 |
 
-目前 stage15.55 編譯結果：
+目前 stage15.48 編譯結果：
 
 | 項目 | 數值 |
 | :--- | :--- |
-| RAM | `110,564 / 327,680 bytes`，約 `33.7%` |
-| Flash | `5,430,958 / 6,553,600 bytes`，約 `82.9%` |
-| BIN | `5,614,976 bytes` |
+| RAM | `110,924 / 327,680 bytes`，約 `33.9%` |
+| Flash | `4,532,080 / 6,553,600 bytes`，約 `69.2%` |
+| BIN | `4,719,872 bytes` |
 
 ## 專案結構
 
@@ -184,7 +167,7 @@ ruru-reader-tw/
 | :--- | :--- |
 | UI 翻譯 | `src/LanguageMapper.h` |
 | 語言選單 | `src/SettingsLists.h` 與 `CrossPointSettings::uiLanguage` |
-| 字型子集 | `scripts/charsets/` 與 `scripts/generate_ui_font_subset.py` |
+| 字型子集 | `scripts/charsets/ui_charset_common7000.txt` 與 `scripts/generate_ui_font_subset.py` |
 | Reader 字型 | `src/main.cpp` 中的 `source_han_sans_tc_17_regular` |
 | 藍芽 keycode | `lib/hal/DeviceProfiles.cpp` |
 | Reader menu 項目 | `src/activities/reader/EpubReaderMenuActivity.h` |
@@ -202,7 +185,7 @@ ruru-reader-tw/
    在 expat 前跑小型 state machine 補 void element 自閉斜線，降低改動範圍。
 
 4. **字型依用途拆字集**
-   10pt 給外部文字與小字，12pt 給主要 UI，17pt reader 維持 common7000，避免完整閱讀字集把韌體撐太大。
+   12pt UI 不塞常用七千字，10pt 外部文字與 17pt reader 才使用 common7000，避免 BIN 變肥。
 
 5. **UI 多語系先集中再逐步接線**
    新增文字集中放 `LanguageMapper`。已接 mapper 的畫面會跟著語言切換；仍有舊硬編字串需要後續整理。
@@ -235,7 +218,7 @@ ruru-reader-tw/
 | 程式碼來源 | 授權 | 可商用？ |
 | :--- | :--- | :--- |
 | 上游（Dave Allie、uxjulia 等） | MIT | 可以 |
-| HelloRuru 修改（stage 8-15.50） | PolyForm Noncommercial 1.0.0 | 須另外取得商業授權 |
+| HelloRuru 修改（stage 8-15.48） | PolyForm Noncommercial 1.0.0 | 須另外取得商業授權 |
 | Source Han Sans / 思源黑體 | SIL Open Font License 1.1 | 可依 OFL 使用 |
 | jf-openhuninn 舊版字型 | CC BY 4.0 | 須標註出處 |
 
