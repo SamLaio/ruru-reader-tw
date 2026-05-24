@@ -3,7 +3,7 @@
  * name: source_han_sans_tc_12_regular
  * size: 12
  * mode: 1-bit
- * Command used: D:\RURU-ALL\Library\工具\閱星曈刷機\Carousel-繁中版\lib\EpdFont\scripts\fontconvert.py source_han_sans_tc_12_regular 12 D:\RURU-ALL\Library\工具\閱星曈刷機\Carousel-繁中版\lib\EpdFont\builtinFonts\source\SourceHanSansTC\SourceHanSansTC-Regular.otf --charset-file D:\RURU-ALL\Library\工具\閱星曈刷機\Carousel-繁中版\scripts\charsets\ui_charset.txt
+ * Command used: fontconvert.py source_han_sans_tc_12_regular 12 SourceHanSansTC-Regular.otf --charset-file ui_charset.txt
  */
 #pragma once
 #include "EpdFontData.h"

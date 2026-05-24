@@ -3,6 +3,7 @@
 
 from build_ui_fonts import (
     FONT_OUTPUT_DIR,
+    can_run_fontconvert,
     EXTERNAL_FONT_SIZES,
     READER_FONT_SIZES,
     UI_CHARSET,
@@ -10,6 +11,8 @@ from build_ui_fonts import (
     UI_CHARSET_READER,
     UI_FONT_SIZES,
     UI_FONT_STYLES,
+    expected_font_outputs,
+    fontconvert_install_hint,
     run_fontconvert,
 )
 
@@ -21,6 +24,16 @@ def main():
         raise SystemExit(f"Missing charset file: {UI_CHARSET_MERGED}")
     if not UI_CHARSET_READER.exists():
         raise SystemExit(f"Missing charset file: {UI_CHARSET_READER}")
+
+    if not can_run_fontconvert():
+        missing_outputs = [path for path in expected_font_outputs() if not path.exists()]
+        print("[generate_ui_font_subset] freetype-py is not installed for this Python.", flush=True)
+        print(f"[generate_ui_font_subset] To regenerate fonts, run: {fontconvert_install_hint()}", flush=True)
+        if not missing_outputs:
+            print("[generate_ui_font_subset] Existing generated font headers found; skipping regeneration.", flush=True)
+            return
+        missing = ", ".join(path.name for path in missing_outputs)
+        raise SystemExit(f"[generate_ui_font_subset] Missing generated font headers: {missing}")
 
     success_count = 0
     for size in UI_FONT_SIZES:
