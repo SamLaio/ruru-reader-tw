@@ -27,12 +27,13 @@ void HomeActivity::taskTrampoline(void* param) {
 }
 
 int HomeActivity::getMenuItemCount() const {
-  if (homeMode == HomeMode::RECENTS) {
-    // RECENTS 模式：只有書本可選
-    return static_cast<int>(recentBooks.size());
-  }
-  // NORMAL 模式：書本 + 2個大按鈕（檔案區/最近閱讀）+ 快捷三鍵
-  return static_cast<int>(recentBooks.size()) + 2 + 3;
+  // stage26: 拿掉「最近閱讀」按鈕（原 RECENTS 模式對應的入口）
+  // stage28.5: OPDS 加進大按鈕區（檔案區旁邊），快捷三鍵不動
+#ifndef DISABLE_OPDS
+  return static_cast<int>(recentBooks.size()) + 2 + 3;  // 書本 + 大按鈕(檔案區/OPDS) + 快捷三鍵
+#else
+  return static_cast<int>(recentBooks.size()) + 1 + 3;  // 書本 + 檔案區 + 快捷三鍵
+#endif
 }
 
 
@@ -256,22 +257,10 @@ void HomeActivity::onExit() {
 }
 
 bool HomeActivity::storeCoverBuffer() {
-  uint8_t* frameBuffer = renderer.getFrameBuffer();
-  if (!frameBuffer) {
-    return false;
-  }
-
-  // Free any existing buffer first
-  freeCoverBuffer();
-
-  const size_t bufferSize = GfxRenderer::getBufferSize();
-  coverBuffer = static_cast<uint8_t*>(malloc(bufferSize));
-  if (!coverBuffer) {
-    return false;
-  }
-
-  memcpy(coverBuffer, frameBuffer, bufferSize);
-  return true;
+  // stage28: 拿掉 48KB 畫面備份，釋出 RAM 給字型載入
+  //   原本為了「返回首頁不重畫」存一份 framebuffer 副本
+  //   實測切自訂字型後 RAM 太緊崩潰，這個備份取消後返回會多刷一次（無感）
+  return false;
 }
 
 bool HomeActivity::restoreCoverBuffer() {
@@ -305,47 +294,35 @@ void HomeActivity::loop() {
 
   const int menuCount = getMenuItemCount();
 
-  // RECENTS 模式按 Back → 回 NORMAL
-  if (homeMode == HomeMode::RECENTS &&
-      mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    homeMode = HomeMode::NORMAL;
-    selectorIndex = 0;
-    coverRendered = false;
-    coverBufferStored = false;
-    updateRequired = true;
-    return;
-  }
-
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     const int bookCount = static_cast<int>(recentBooks.size());
-    if (homeMode == HomeMode::RECENTS) {
-      // RECENTS 模式：只有書本，直接開書
-      if (selectorIndex < bookCount) {
-        onSelectBook(recentBooks[selectorIndex].path);
-      }
+    // stage26: 拿掉 RECENTS 模式 — 書封可選開書 + 檔案區大按鈕 + 快捷三鍵
+    if (selectorIndex < bookCount) {
+      // 書封區 → 直接開書
+      onSelectBook(recentBooks[selectorIndex].path);
     } else {
-      // NORMAL 模式：書封可選開書 + 2大按鈕 + 快捷三鍵
-      if (selectorIndex < bookCount) {
-        // 書封區 → 直接開書
-        onSelectBook(recentBooks[selectorIndex].path);
-      } else {
-        const int menuIdx = selectorIndex - bookCount;
-        if (menuIdx == 0) {
-          // 檔案區 → MyLibrary
-          onMyLibraryOpen();
-        } else if (menuIdx == 1) {
-          // 最近閱讀 → 切換到 RECENTS 模式
-          homeMode = HomeMode::RECENTS;
-          selectorIndex = 0;
-          coverRendered = false;
-          coverBufferStored = false;
-          updateRequired = true;
-        } else if (menuIdx >= 2) {
-          const int quickIdx = menuIdx - 2;
-          if (quickIdx == 0) onFileTransferOpen();
-          else if (quickIdx == 1) onSettingsOpen();
-          else if (quickIdx == 2) onBluetoothOpen();
-        }
+      const int menuIdx = selectorIndex - bookCount;
+      // stage28.5: 大按鈕區 = 檔案區(0) + OPDS(1)，快捷區後移
+#ifndef DISABLE_OPDS
+      constexpr int bigBtnCount = 2;
+#else
+      constexpr int bigBtnCount = 1;
+#endif
+      if (menuIdx == 0) {
+        // 檔案區 → MyLibrary
+        onMyLibraryOpen();
+      }
+#ifndef DISABLE_OPDS
+      else if (menuIdx == 1) {
+        // OPDS 大按鈕 → OPDS Browser
+        onOpdsBrowserOpen();
+      }
+#endif
+      else if (menuIdx >= bigBtnCount) {
+        const int quickIdx = menuIdx - bigBtnCount;
+        if (quickIdx == 0) onFileTransferOpen();
+        else if (quickIdx == 1) onSettingsOpen();
+        else if (quickIdx == 2) onBluetoothOpen();
       }
     }
   } else if (prevPressed) {
@@ -379,52 +356,65 @@ void HomeActivity::render() {
   renderer.clearScreen();
   bool bufferRestored = coverBufferStored && restoreCoverBuffer();
 
-  const char* headerTitle    = (homeMode == HomeMode::RECENTS) ? "最近閱讀" : nullptr;
-  const char* headerSubtitle = (homeMode == HomeMode::RECENTS) ? "< Back" : nullptr;
-  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.homeTopPadding}, headerTitle, headerSubtitle);
+  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.homeTopPadding}, nullptr, nullptr);
 
+  // stage28.5: 快捷區還原為三鍵，OPDS 移到大按鈕區
   const std::vector<UIIcon> quickIcons = {UIIcon::Wifi, UIIcon::Settings, UIIcon::Hotspot};
   const std::vector<const char*> quickLabels = {"WiFi", "設定", "藍芽"};
   const int bookCount = static_cast<int>(recentBooks.size());
 
-  if (homeMode == HomeMode::RECENTS) {
-    // ── RECENTS 模式：整個畫面都是書封（含進度條），無快捷鍵 ──
-    const int coverH = pageHeight - metrics.homeTopPadding;
-    GUI.drawRecentBookCover(renderer, Rect{0, metrics.homeTopPadding, pageWidth, coverH},
-                            recentBooks, selectorIndex, coverRendered, coverBufferStored, bufferRestored,
-                            std::bind(&HomeActivity::storeCoverBuffer, this));
+  // stage26: 拿掉 RECENTS 模式 — 只有書封 + 檔案區大按鈕 + 快捷三鍵
+  GUI.drawRecentBookCover(renderer, Rect{0, metrics.homeTopPadding, pageWidth, metrics.homeCoverTileHeight},
+                          recentBooks, selectorIndex, coverRendered, coverBufferStored, bufferRestored,
+                          std::bind(&HomeActivity::storeCoverBuffer, this));
+
+  const int coverBottomY = metrics.homeTopPadding + metrics.homeCoverTileHeight;
+  const int menuRectY = coverBottomY + 8;
+  const int menuRectH = pageHeight - menuRectY - 4;
+  const int menuSelIdx = selectorIndex - bookCount;
+  // stage28.5: 大按鈕區 = 檔案區 + OPDS（若 OPDS 啟用），快捷區 = WiFi/設定/藍芽
+#ifndef DISABLE_OPDS
+  constexpr int sdDirCount = 2;
+#else
+  constexpr int sdDirCount = 1;
+#endif
+  const int buttonCount = sdDirCount + static_cast<int>(quickLabels.size());
+  GUI.drawButtonMenu(
+      renderer,
+      Rect{0, menuRectY, pageWidth, menuRectH},
+      buttonCount, menuSelIdx,
+      [&quickLabels](int index) -> std::string {
+        if (index == 0) return "檔案區";
+#ifndef DISABLE_OPDS
+        if (index == 1) return "OPDS";
+        return std::string(quickLabels[index - 2]);
+#else
+        return std::string(quickLabels[index - 1]);
+#endif
+      },
+      [&quickIcons](int index) -> UIIcon {
+        if (index == 0) return UIIcon::Folder;
+#ifndef DISABLE_OPDS
+        if (index == 1) return UIIcon::Library;
+        return quickIcons[index - 2];
+#else
+        return quickIcons[index - 1];
+#endif
+      },
+      sdDirCount);
+
+  // stage23.1: 首次進首頁時書封區會出現空白要按一下才顯示，原因是 e-paper
+  // 單次 FAST_REFRESH 圖片粒子沒推到位（pablohc 技巧）。第一次 render 改用
+  // displayBufferClean（雙刷）讓書封一進來就顯示。後續刷新走 FAST 即可。
+  if (!firstRenderDone) {
+    renderer.displayBufferClean();
   } else {
-    // ── NORMAL 模式：書封 + 兩個大按鈕 + 快捷三鍵 ──
-    GUI.drawRecentBookCover(renderer, Rect{0, metrics.homeTopPadding, pageWidth, metrics.homeCoverTileHeight},
-                            recentBooks, selectorIndex, coverRendered, coverBufferStored, bufferRestored,
-                            std::bind(&HomeActivity::storeCoverBuffer, this));
-
-    const int coverBottomY = metrics.homeTopPadding + metrics.homeCoverTileHeight;
-    const int menuRectY = coverBottomY + 8;
-    const int menuRectH = pageHeight - menuRectY - 4;
-    const int menuSelIdx = selectorIndex - bookCount;
-    GUI.drawButtonMenu(
-        renderer,
-        Rect{0, menuRectY, pageWidth, menuRectH},
-        5, menuSelIdx,
-        [&quickLabels](int index) -> std::string {
-          if (index == 0) return "檔案區";
-          if (index == 1) return "最近閱讀";
-          return std::string(quickLabels[index - 2]);
-        },
-        [&quickIcons](int index) -> UIIcon {
-          if (index == 0) return UIIcon::Folder;
-          if (index == 1) return UIIcon::Book;
-          return quickIcons[index - 2];
-        },
-        2);
+    renderer.displayBuffer();
   }
-
-  renderer.displayBuffer();
 
   if (!firstRenderDone) {
     firstRenderDone = true;
-    updateRequired = true;
+    // stage23.1: 第一次已用 displayBufferClean 雙刷顯示乾淨，不再強制觸發第二次 render
   } else if (!recentsLoaded && !recentsLoading) {
     recentsLoading = true;
     loadRecentCovers(metrics.homeCoverHeight);

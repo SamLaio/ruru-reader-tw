@@ -319,9 +319,9 @@ void MonoInkTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCo
 
   // 大按鈕區高度（NORMAL 模式）
   constexpr int bigAreaH = 120;
-  // 大按鈕寬度：最近閱讀 60%、檔案區 40%
-  const int bigW0 = W * 40 / 100;  // 192 — 檔案區（左小）
-  const int bigW1 = W - bigW0;     // 288 — 最近閱讀（右大）
+  // stage28.5: 大按鈕寬度改 50/50（檔案區 / OPDS 對等）
+  const int bigW0 = W / 2;       // 240 — 檔案區
+  const int bigW1 = W - bigW0;   // 240 — OPDS
 
   const int topAreaH = (sdDirCount > 0) ? bigAreaH : 0;
 
@@ -378,11 +378,15 @@ void MonoInkTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCo
     }
   };
 
-  // ── NORMAL 模式：兩個大按鈕（最近閱讀 60% | 檔案區 40%）──
+  // ── NORMAL 模式大按鈕區 ──
   if (sdDirCount >= 2) {
+    // 兩顆大按鈕（最近閱讀 60% | 檔案區 40%）
     const int bigY = rect.y;
     drawTile(0, rect.x,        bigY, bigW0, bigAreaH, true);
     drawTile(1, rect.x + bigW0, bigY, bigW1, bigAreaH, true);
+  } else if (sdDirCount == 1) {
+    // stage26: 拿掉最近閱讀後改一顆大按鈕（檔案區），填滿整個寬度
+    drawTile(0, rect.x, rect.y, W, bigAreaH, true);
   }
 
   // ── 分隔線 ──
@@ -495,12 +499,17 @@ void MonoInkTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect,
   };
 
   // ── 2×2 格局（書本循環顯示，選中書固定在格 0）──
+  // stage23.2: 書本數量少於 4 本時不重複填滿，超出 count 的格子顯示空框
   for (int row = 0; row < rows; row++) {
     for (int col = 0; col < cols; col++) {
       const int slot     = row * cols + col;
-      const int bookIdx  = (curIdx + slot) % count;
       const int tx = rect.x + col * (tileW + gap);
       const int ty = rect.y + row * (tileH + gap);
+      if (slot >= count) {
+        drawBookTile(-1, tx, ty, tileW, tileH);
+        continue;
+      }
+      const int bookIdx = (curIdx + slot) % count;
       drawBookTile(bookIdx, tx, ty, tileW, tileH);
     }
   }
