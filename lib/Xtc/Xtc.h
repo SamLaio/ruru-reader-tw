@@ -119,6 +119,7 @@ size_t getmaxchapter(){
     if (parser) {
         return parser->maxChapterCount;
     }
+    return 0;
 };
 
 

@@ -4,6 +4,7 @@
 #include <Epub.h>
 #include <GfxRenderer.h>
 #include <SDCardManager.h>
+#include <esp_task_wdt.h>
 
 #include <algorithm>
 #include <cstring>
@@ -25,6 +26,10 @@ constexpr int TILE_PADDING = 6;
 constexpr int TITLE_BOTTOM_PADDING = 4;
 constexpr int SELECTION_RADIUS = 6;
 constexpr unsigned long SKIP_PAGE_MS = 700;
+
+void resetWatchdog() {
+  esp_task_wdt_reset();
+}
 
 int clampPercent(const int percent) {
   if (percent < 0) {
@@ -102,6 +107,7 @@ void RecentBooksActivity::loadRecentBooks() {
 
   int skippedMissing = 0;
   for (const auto& book : books) {
+    resetWatchdog();
     // Skip if file no longer exists
     if (!SdMan.exists(book.path.c_str())) {
       skippedMissing++;
@@ -232,8 +238,10 @@ void RecentBooksActivity::displayTaskLoop() {
   while (true) {
     if (updateRequired) {
       updateRequired = false;
+      resetWatchdog();
       xSemaphoreTake(renderingMutex, portMAX_DELAY);
       render();
+      resetWatchdog();
       xSemaphoreGive(renderingMutex);
     }
     vTaskDelay(10 / portTICK_PERIOD_MS);

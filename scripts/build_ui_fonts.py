@@ -47,6 +47,7 @@ HASH_CACHE = ROOT / ".pio" / "ui_font_charset.hash"  # 上次 build 用的 chars
 FONT_SOURCE = ROOT / "lib" / "EpdFont" / "builtinFonts" / "source" / "SourceHanSansTC"
 FONT_OUTPUT_DIR = ROOT / "lib" / "EpdFont" / "builtinFonts"
 FONTCONVERT = ROOT / "lib" / "EpdFont" / "scripts" / "fontconvert.py"
+FONTCONVERT_REQUIREMENTS = ROOT / "lib" / "EpdFont" / "scripts" / "requirements.txt"
 
 # UI / 外部文字 / reader 用不同字號，但共用常用字集，避免塞完整閱讀字集
 UI_FONT_SIZES = [12]
@@ -127,6 +128,28 @@ def merged_charset_hash(*charsets):
     return h.hexdigest()
 
 
+def expected_font_outputs():
+    """Return the generated font headers required by the firmware build."""
+    sizes = UI_FONT_SIZES + EXTERNAL_FONT_SIZES + READER_FONT_SIZES
+    return [
+        FONT_OUTPUT_DIR / f"source_han_sans_tc_{size}_{style}.h"
+        for size in sizes
+        for style in UI_FONT_STYLES
+    ]
+
+
+def fontconvert_install_hint():
+    return f"{sys.executable} -m pip install -r {FONTCONVERT_REQUIREMENTS}"
+
+
+def can_run_fontconvert():
+    try:
+        import freetype  # noqa: F401
+        return True
+    except ModuleNotFoundError:
+        return False
+
+
 def run_fontconvert(size, style, charset_file, output_path):
     """跑 fontconvert.py 產 epdfont .h"""
     font_name = f"source_han_sans_tc_{size}_{style}"
@@ -148,7 +171,10 @@ def run_fontconvert(size, style, charset_file, output_path):
         str(charset_file),
     ]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
+        env = os.environ.copy()
+        env["PYTHONIOENCODING"] = "utf-8"
+        env["PYTHONUTF8"] = "1"
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", env=env)
         if result.returncode != 0:
             print(f"  ERROR: fontconvert failed for {font_name}", file=sys.stderr)
             print(result.stderr, file=sys.stderr)
@@ -191,14 +217,22 @@ def main():
     HASH_CACHE.parent.mkdir(parents=True, exist_ok=True)
     if HASH_CACHE.exists():
         last_hash = HASH_CACHE.read_text().strip()
-        expected_sizes = UI_FONT_SIZES + EXTERNAL_FONT_SIZES + READER_FONT_SIZES
         if last_hash == current_hash and all(
-            (FONT_OUTPUT_DIR / f"source_han_sans_tc_{size}_{style}.h").exists()
-            for size in expected_sizes
-            for style in UI_FONT_STYLES
+            path.exists()
+            for path in expected_font_outputs()
         ):
             print("[build_ui_fonts] No charset changes since last build, skipping font generation.")
             return
+
+    if not can_run_fontconvert():
+        missing_outputs = [path for path in expected_font_outputs() if not path.exists()]
+        print("[build_ui_fonts] freetype-py is not installed for this Python.", file=sys.stderr)
+        print(f"[build_ui_fonts] To regenerate fonts, run: {fontconvert_install_hint()}", file=sys.stderr)
+        if not missing_outputs:
+            print("[build_ui_fonts] Existing generated font headers found; skipping regeneration.")
+            return
+        missing = ", ".join(path.name for path in missing_outputs)
+        raise SystemExit(f"[build_ui_fonts] Missing generated font headers: {missing}")
 
     # 4. 跑 fontconvert 產生子集字型
     print("[build_ui_fonts] Charset changed (or first build), regenerating UI fonts...")

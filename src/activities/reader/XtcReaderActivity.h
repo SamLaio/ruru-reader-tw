@@ -31,7 +31,7 @@ class XtcReaderActivity final : public ActivityWithSubactivity {
   static void taskTrampoline(void* param);
   [[noreturn]] void displayTaskLoop();
   void renderScreen();
-  bool isRenderUpperHalf;
+  bool isRenderUpperHalf = false;
   void renderPage(bool isRenderUpperHalf);
   void saveProgress() const;
   void loadProgress();

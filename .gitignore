@@ -17,3 +17,6 @@ build_*.log
 *.carousel
 release/*
 !release/README.md
+
+.history
+RELEASE_NOTES.md

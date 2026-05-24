@@ -76,8 +76,8 @@ std::string getChapterTitleByIndex(int chapterIndex) {
     Serial.printf("[%lu] [XTC] 已进入getChapterTitleByIndex，chapterActualCount=%d\n", millis(),chapterActualCount);
     for(int i = 0; i < 25; i++) {
         if(ChapterList[i].chapterIndex == chapterIndex) {
-            return std::string(ChapterList[i].shortTitle);
             Serial.printf("[%lu] [XTC] getChapterTitleByIndex里第%d章，名字为:%s %u\n", millis(), i, ChapterList[i].shortTitle);
+            return std::string(ChapterList[i].shortTitle);
         }
     }
     return ""; // 无此章节返回空字符串

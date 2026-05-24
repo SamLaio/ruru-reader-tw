@@ -6,6 +6,7 @@
 #include <SDCardManager.h>
 #include <Utf8.h>
 #include <Xtc.h>
+#include <esp_task_wdt.h>
 
 #include <cstring>
 #include <vector>
@@ -20,6 +21,12 @@
 #include "util/StringUtils.h"
 //清理字体内存
 #include "CustomEpdFont.h"
+
+namespace {
+void resetWatchdog() {
+  esp_task_wdt_reset();
+}
+}  // namespace
 
 void HomeActivity::taskTrampoline(void* param) {
   auto* self = static_cast<HomeActivity*>(param);
@@ -82,7 +89,9 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
   //   原本 if (!coverBmpPath.empty()) 才抓 → 沒點進去過的書永遠拿不到 coverBmpPath
   //   現在改：不管 coverBmpPath 有沒有、只要 cache 不存在就主動 load epub 拿 metadata + 生 thumb
   int progress = 0;
+  const int progressStep = recentBooks.empty() ? 0 : 90 / static_cast<int>(recentBooks.size());
   for (RecentBook& book : recentBooks) {
+    resetWatchdog();
     // 先看「已知 coverBmpPath」對應的 cache 在不在
     bool needBuildThumb = true;
     if (!book.coverBmpPath.empty()) {
@@ -101,24 +110,26 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
     // 兩種狀況都要 load epub/xtc 拿 metadata + 生 thumb
     if (StringUtils::checkFileExtension(book.path, ".epub")) {
       Epub epub(book.path, "/.crosspoint");
+      resetWatchdog();
       epub.load(false, true);  // Skip CSS、只要 metadata
 
       if (!showingLoading) {
         showingLoading = true;
         popupRect = GUI.drawPopup(renderer, "Loading...");
       }
-      GUI.fillPopupProgress(renderer, popupRect, 10 + progress * (90 / recentBooks.size()));
+      GUI.fillPopupProgress(renderer, popupRect, 10 + progress * progressStep);
+      resetWatchdog();
       bool success = epub.generateThumbBmp(coverHeight);
       if (success) {
         // 拿到 thumb 後、回寫 metadata 到 RECENT_BOOKS（含 coverBmpPath、title、author）
         const std::string thumbPath = epub.getThumbBmpPath();
         const std::string title = epub.getTitle();
         const std::string author = epub.getAuthor();
-        RECENT_BOOKS.updateBook(book.path, title, author, thumbPath);
+        const std::string storedTitle = title.empty() ? book.title : title;
+        const std::string storedAuthor = author.empty() ? book.author : author;
+        RECENT_BOOKS.updateBook(book.path, storedTitle, storedAuthor, thumbPath);
         book.coverBmpPath = thumbPath;
-        if (!book.title.empty() && title.empty()) {
-          // 保留既有 title（避免 metadata 為空時清空）
-        } else if (!title.empty()) {
+        if (!title.empty()) {
           book.title = title;
           book.author = author;
         }
@@ -136,7 +147,8 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
           showingLoading = true;
           popupRect = GUI.drawPopup(renderer, "Loading...");
         }
-        GUI.fillPopupProgress(renderer, popupRect, 10 + progress * (90 / recentBooks.size()));
+        GUI.fillPopupProgress(renderer, popupRect, 10 + progress * progressStep);
+        resetWatchdog();
         bool success = xtc.generateThumbBmp(coverHeight);
         if (success) {
           const std::string thumbPath = xtc.getThumbBmpPath();
@@ -340,8 +352,10 @@ void HomeActivity::displayTaskLoop() {
   while (true) {
     if (updateRequired) {
       updateRequired = false;
+      resetWatchdog();
       xSemaphoreTake(renderingMutex, portMAX_DELAY);
       render();
+      resetWatchdog();
       xSemaphoreGive(renderingMutex);
     }
     vTaskDelay(10 / portTICK_PERIOD_MS);

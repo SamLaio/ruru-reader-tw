@@ -2,6 +2,7 @@
 
 #include <GfxRenderer.h>
 #include <SDCardManager.h>
+#include <esp_task_wdt.h>
 
 #include <algorithm>
 
@@ -18,6 +19,10 @@ constexpr int SKIP_PAGE_MS = 700;
 constexpr unsigned long GO_HOME_MS = 1000;
 //防止误删，把删除改为长按confirm
 constexpr int COPY_BUF_SIZE = 256; // 256字节缓冲区，适配小运存
+
+void resetWatchdog() {
+  esp_task_wdt_reset();
+}
 }  // namespace
 //把原来几个函数加上
 //删除
@@ -75,6 +80,7 @@ bool copyFile(const char* srcPath, const char* dstPath) {
   uint8_t buf[COPY_BUF_SIZE];
   size_t readBytes = 0;
   while ((readBytes = srcFile.read(buf, COPY_BUF_SIZE)) > 0) {
+    resetWatchdog();
     dstFile.write(buf, readBytes);
   }
 
@@ -112,6 +118,7 @@ void searchFilesRecursive(const std::string& currentDir, const std::string& keyw
   char name[500];
   root.rewindDirectory();
   for (auto file = root.openNextFile(); file; file = root.openNextFile()) {
+    resetWatchdog();
     file.getName(name, sizeof(name));
     if (name[0] == '.' || strcmp(name, "System Volume Information") == 0 || strcmp(name, "fonts") == 0) {
       file.close();
@@ -252,6 +259,7 @@ void MyLibraryActivity::loadFiles() {
 
   char name[500];
   for (auto file = root.openNextFile(); file; file = root.openNextFile()) {
+    resetWatchdog();
     file.getName(name, sizeof(name));
     if (name[0] == '.' || strcmp(name, "System Volume Information") == 0 || strcmp(name, "fonts") == 0) {
       file.close();
@@ -498,7 +506,7 @@ void MyLibraryActivity::loop() {
   const bool downReleased = mappedInput.wasReleased(MappedInputManager::Button::Down);
 
   const bool skipPage = mappedInput.getHeldTime() > SKIP_PAGE_MS;
-  const int pageItems = UITheme::getInstance().getNumberOfItemsPerPage(renderer, true, false, true, false);
+  const int pageItems = std::max(1, UITheme::getInstance().getNumberOfItemsPerPage(renderer, true, false, true, false));
 
   //把文件打开的逻辑放上面了
   //这里去掉了
@@ -530,16 +538,21 @@ if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
 
   const auto& displayList = isSearchMode ? searchResults : files;
   int listSize = static_cast<int>(displayList.size());
+  if (listSize <= 0) {
+    return;
+  }
   if (upReleased) {
     if (skipPage) {
-      selectorIndex = std::max(static_cast<int>((selectorIndex / pageItems - 1) * pageItems), 0);
+      const int currentPage = static_cast<int>(selectorIndex) / pageItems;
+      selectorIndex = static_cast<size_t>(std::max((currentPage - 1) * pageItems, 0));
     } else {
       selectorIndex = (selectorIndex + listSize - 1) % listSize;
     }
     updateRequired = true;
   } else if (downReleased) {
     if (skipPage) {
-      selectorIndex = std::min(static_cast<int>((selectorIndex / pageItems + 1) * pageItems), listSize - 1);
+      const int currentPage = static_cast<int>(selectorIndex) / pageItems;
+      selectorIndex = static_cast<size_t>(std::min((currentPage + 1) * pageItems, listSize - 1));
     } else {
       selectorIndex = (selectorIndex + 1) % listSize;
     }
@@ -553,8 +566,10 @@ void MyLibraryActivity::displayTaskLoop() {
   while (true) {
     if (updateRequired) {
       updateRequired = false;
+      resetWatchdog();
       xSemaphoreTake(renderingMutex, portMAX_DELAY);
       render();
+      resetWatchdog();
       xSemaphoreGive(renderingMutex);
     }
     vTaskDelay(10 / portTICK_PERIOD_MS);
