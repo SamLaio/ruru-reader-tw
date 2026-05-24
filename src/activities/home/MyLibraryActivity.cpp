@@ -348,6 +348,40 @@ void MyLibraryActivity::loop() {
       pendingSearch = false;
       updateRequired = true;
   }
+
+  // stage32: popup 狀態攔截 — 在 popup 期間其他鍵都不處理
+  if (popupState != PopupState::NONE) {
+    if (popupState == PopupState::CONFIRM_DELETE) {
+      if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+        Serial.printf("[刪除] 確認刪除：%s\n", pendingDeletePath.c_str());
+        deleteFileOrDir(pendingDeletePath);
+        if (isSearchMode) {
+          executeSearch();
+        } else {
+          loadFiles();
+        }
+        popupState = PopupState::NONE;
+        pendingDeletePath.clear();
+        popupMessage.clear();
+        updateRequired = true;
+      } else if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+        Serial.printf("[刪除] 取消\n");
+        popupState = PopupState::NONE;
+        pendingDeletePath.clear();
+        popupMessage.clear();
+        updateRequired = true;
+      }
+    } else {
+      // NOTICE_COPY / NOTICE_CUT — 任意鍵關閉
+      if (mappedInput.wasAnyReleased()) {
+        popupState = PopupState::NONE;
+        popupMessage.clear();
+        updateRequired = true;
+      }
+    }
+    return;  // popup 期間不跑下面的列表選擇邏輯
+  }
+
   // Long press BACK (1s+) goes to root folder
   if (mappedInput.isPressed(MappedInputManager::Button::Back) && mappedInput.getHeldTime() >= GO_HOME_MS &&
       basepath != "/") {
@@ -419,32 +453,49 @@ void MyLibraryActivity::loop() {
         updateRequired = true;
         return;
 
-      case TopOption::DELETE: 
-        if (mappedInput.getHeldTime() >= 500) {
-          deleteFileOrDir(fullPath); // 改用统一的fullPath
-          // 删除后刷新列表（区分模式）
-          if (isSearchMode) {
-            executeSearch(); // 搜索模式：重新搜索
-          } else {
-            loadFiles();     // 普通模式：重新加载
+      case TopOption::DELETE:
+        // stage32: 改為點一下跳確認對話框（取代長按 0.5s）
+        pendingDeletePath = fullPath;
+        popupState = PopupState::CONFIRM_DELETE;
+        {
+          // 顯示「刪除『xxx』？」訊息（只取檔名部分）
+          std::string displayName = selectedItem;
+          if (!displayName.empty() && displayName.back() == '/') {
+            displayName.pop_back();
           }
-        } else {
-          Serial.printf("[刪除] 需長按Confirm確認刪除\n");
+          popupMessage = std::string("刪除「") + displayName + "」？\nConfirm 確認 / Back 取消";
         }
+        updateRequired = true;
         break;
 
-      case TopOption::COPY: 
-        copySourcePath = fullPath; // 改用统一的fullPath
+      case TopOption::COPY:
+        copySourcePath = fullPath;
         hasCopyData = true;
         isCutMode = false;
         Serial.printf("[複製] 已選中：%s\n", copySourcePath.c_str());
+        // stage32: 顯示通知 popup，任意鍵關閉
+        popupState = PopupState::NOTICE_COPY;
+        {
+          std::string displayName = selectedItem;
+          if (!displayName.empty() && displayName.back() == '/') displayName.pop_back();
+          popupMessage = std::string("已選取「") + displayName + "」為複製來源\n移到目標資料夾按貼上";
+        }
+        updateRequired = true;
         break;
 
-      case TopOption::CUT: 
-        copySourcePath = fullPath; // 改用统一的fullPath
+      case TopOption::CUT:
+        copySourcePath = fullPath;
         hasCopyData = true;
         isCutMode = true;
         Serial.printf("[剪下] 已選中：%s（貼上後將刪除原始檔）\n", copySourcePath.c_str());
+        // stage32: 顯示通知 popup，任意鍵關閉
+        popupState = PopupState::NOTICE_CUT;
+        {
+          std::string displayName = selectedItem;
+          if (!displayName.empty() && displayName.back() == '/') displayName.pop_back();
+          popupMessage = std::string("已選取「") + displayName + "」為剪下來源\n貼上時會刪除原檔";
+        }
+        updateRequired = true;
         break;
 
       case TopOption::PASTE: 
@@ -649,6 +700,54 @@ void MyLibraryActivity::render() const {
   // Help text
   const auto labels = mappedInput.mapLabels("« 返回", "選擇", "左選", "右選");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+
+  // stage32: 自畫多行 popup（GUI.drawPopup 只支援單行、訊息含 \n + 長檔名會超出螢幕）
+  if (popupState != PopupState::NONE && !popupMessage.empty()) {
+    const int screenW = renderer.getScreenWidth();
+    const int screenH = renderer.getScreenHeight();
+    const int lineH = renderer.getLineHeight(UI_12_FONT_ID);
+    constexpr int padX = 20;
+    constexpr int padY = 16;
+    const int maxW = screenW - 40;          // 訊息區最大寬（兩邊各留 20）
+    const int maxLineW = maxW - padX * 2;   // 文字最大寬
+
+    // 按 \n 切行
+    std::vector<std::string> lines;
+    {
+      std::string cur;
+      for (char c : popupMessage) {
+        if (c == '\n') { lines.push_back(cur); cur.clear(); }
+        else cur.push_back(c);
+      }
+      if (!cur.empty()) lines.push_back(cur);
+    }
+
+    // 每行用 truncatedText 截斷避免超寬
+    int contentW = 0;
+    for (auto& l : lines) {
+      l = renderer.truncatedText(UI_12_FONT_ID, l.c_str(), maxLineW);
+      const int lw = renderer.getTextWidth(UI_12_FONT_ID, l.c_str(), EpdFontFamily::BOLD);
+      if (lw > contentW) contentW = lw;
+    }
+
+    const int boxW = std::min(contentW + padX * 2, maxW);
+    const int boxH = static_cast<int>(lines.size()) * lineH + padY * 2;
+    const int boxX = (screenW - boxW) / 2;
+    const int boxY = (screenH - boxH) / 2;
+
+    // 黑外框 + 白內底（高對比）
+    renderer.fillRect(boxX - 3, boxY - 3, boxW + 6, boxH + 6, true);
+    renderer.fillRect(boxX, boxY, boxW, boxH, false);
+
+    // 逐行畫文字（垂直置中）
+    int yCursor = boxY + padY;
+    for (const auto& l : lines) {
+      const int lw = renderer.getTextWidth(UI_12_FONT_ID, l.c_str(), EpdFontFamily::BOLD);
+      const int textX = boxX + (boxW - lw) / 2;
+      renderer.drawText(UI_12_FONT_ID, textX, yCursor, l.c_str(), true, EpdFontFamily::BOLD);
+      yCursor += lineH;
+    }
+  }
 
   renderer.displayBuffer();
 }

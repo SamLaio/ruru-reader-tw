@@ -433,70 +433,18 @@ int CrossPointSettings::getRefreshFrequency() const {
 }
 #include <EpdFontLoader.h>
 int CrossPointSettings::getReaderFontId() const {
-
+  // stage31: 字體系統整併為單一 RURU_FONT_ID
+  // FONT_CUSTOM 仍從 SD 卡載入 .epdfont（保留自訂字型上傳功能）
   if (fontFamily == FONT_CUSTOM) {
     uint8_t targetSize = customFontSize;
     if (targetSize == 0) {
-      switch (fontSize) {
-        case SMALL:
-          targetSize = 12;
-          break;
-        case MEDIUM:
-        default:
-          targetSize = 14;
-          break;
-        case LARGE:
-          targetSize = 16;
-          break;
-        case EXTRA_LARGE:
-          targetSize = 18;
-          break;
-      }
+      // 字號設定 stage31 已砍，用固定 14pt 對應 SD 卡 .epdfont
+      targetSize = 14;
     }
     int id = EpdFontLoader::getBestFontId(customFontFamily, targetSize);
     if (id != -1) return id;
-    // Fallback if custom font not found
+    // Fallback 找不到 SD 字型就用內建
   }
-
-  switch (fontFamily) {
-    case BOOKERLY:
-    default:
-      switch (fontSize) {
-        case SMALL:
-          return BOOKERLY_12_FONT_ID;
-        case MEDIUM:
-        default:
-          return BOOKERLY_14_FONT_ID;
-        case LARGE:
-          return BOOKERLY_16_FONT_ID;
-        case EXTRA_LARGE:
-          return BOOKERLY_18_FONT_ID;
-      }
-    case NOTOSANS:
-      switch (fontSize) {
-        case SMALL:
-          return NOTOSANS_12_FONT_ID;
-        case MEDIUM:
-        default:
-          return NOTOSANS_14_FONT_ID;
-        case LARGE:
-          return NOTOSANS_16_FONT_ID;
-        case EXTRA_LARGE:
-          return NOTOSANS_18_FONT_ID;
-      }
-    // stage12.5: OPENDYSLEXIC 砍掉，fallback 到 NOTOSANS（用 NOTOSANS case 的程式碼）
-    case OPENDYSLEXIC:
-      switch (fontSize) {
-        case SMALL:
-          return NOTOSANS_12_FONT_ID;
-        case MEDIUM:
-        default:
-          return NOTOSANS_14_FONT_ID;
-        case LARGE:
-          return NOTOSANS_16_FONT_ID;
-        case EXTRA_LARGE:
-          return NOTOSANS_18_FONT_ID;
-      }
-  }
-  return NOTOSANS_14_FONT_ID;
+  // 其他所有 fontFamily/fontSize 組合都回 RURU_FONT_ID（所有舊 ID 也別名指它）
+  return RURU_FONT_ID;
 }

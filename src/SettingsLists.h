@@ -30,12 +30,12 @@ inline std::vector<SettingInfo> getSettingsList() {
     SettingInfo::Toggle("抗陽光褪色", &CrossPointSettings::fadingFix,"Sunlight Fading Compensation","Display"),
 
       // --- Reader ---
-      // stage15.48: 字型標籤誠實標示
-      //   3 個 enum 值（BOOKERLY/NOTOSANS/OPENDYSLEXIC）實際全部都綁同一個思源黑體 TC 子集
-      //   見 main.cpp:45-48 全用 source_han_sans_tc_17_regular
-      //   FONT_CUSTOM 才是真的不同字型（從 SD 卡 .epdfont 載入）
+      // stage31: 字體系統大瘦身
+      //   全韌體只用 1 個字體（10pt 思源黑體 TC、5400+ 字常用字集）
+      //   字號設定砍掉（reader 永遠 10pt）
+      //   字型選單保留 4 個值給舊 settings.bin 相容，BOOKERLY/NOTOSANS/OPENDYSLEXIC 全綁同一個字體
+      //   只有 FONT_CUSTOM 真的從 SD 卡 .epdfont 載入不同字型
       SettingInfo::Enum("字型", &CrossPointSettings::fontFamily, {"思源黑體", "思源黑體", "思源黑體", "自定義"}, "字型", "Reader"),
-      SettingInfo::Enum("字號", &CrossPointSettings::fontSize, {"小", "中", "大", "特大"}, "字號", "Reader"),
     SettingInfo::Enum("行間距", &CrossPointSettings::lineSpacing,  {"Tight", "Normal", "Wide"}, "行間距", "Reader"),
     SettingInfo::Toggle("首行縮排", &CrossPointSettings::firstlineintented, "首行縮排","Reader"),
     SettingInfo::Value("字間距", &CrossPointSettings::wordSpacing, 0,10,2, "字間距", "Reader"),

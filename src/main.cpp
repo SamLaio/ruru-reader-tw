@@ -52,79 +52,13 @@ void resetWatchdog() {
 }
 }  // namespace
 
-// Fonts
-EpdFont bookerly14RegularFont(&source_han_sans_tc_17_regular);
-EpdFont bookerly14BoldFont(&source_han_sans_tc_17_regular);
-EpdFont bookerly14ItalicFont(&source_han_sans_tc_17_regular);
-EpdFont bookerly14BoldItalicFont(&source_han_sans_tc_17_regular);
-EpdFontFamily bookerly14FontFamily(&bookerly14RegularFont, &bookerly14BoldFont, &bookerly14ItalicFont,
-                                   &bookerly14BoldItalicFont);
-#ifndef OMIT_FONTS
-EpdFont bookerly12RegularFont(&source_han_sans_tc_17_regular);
-EpdFont bookerly12BoldFont(&source_han_sans_tc_17_regular);
-EpdFont bookerly12ItalicFont(&source_han_sans_tc_17_regular);
-EpdFont bookerly12BoldItalicFont(&source_han_sans_tc_17_regular);
-EpdFontFamily bookerly12FontFamily(&bookerly12RegularFont, &bookerly12BoldFont, &bookerly12ItalicFont,
-                                   &bookerly12BoldItalicFont);
-EpdFont bookerly16RegularFont(&source_han_sans_tc_17_regular);
-EpdFont bookerly16BoldFont(&source_han_sans_tc_17_regular);
-EpdFont bookerly16ItalicFont(&source_han_sans_tc_17_regular);
-EpdFont bookerly16BoldItalicFont(&source_han_sans_tc_17_regular);
-EpdFontFamily bookerly16FontFamily(&bookerly16RegularFont, &bookerly16BoldFont, &bookerly16ItalicFont,
-                                   &bookerly16BoldItalicFont);
-EpdFont bookerly18RegularFont(&source_han_sans_tc_17_regular);
-EpdFont bookerly18BoldFont(&source_han_sans_tc_17_regular);
-EpdFont bookerly18ItalicFont(&source_han_sans_tc_17_regular);
-EpdFont bookerly18BoldItalicFont(&source_han_sans_tc_17_regular);
-EpdFontFamily bookerly18FontFamily(&bookerly18RegularFont, &bookerly18BoldFont, &bookerly18ItalicFont,
-                                   &bookerly18BoldItalicFont);
-
-EpdFont notosans12RegularFont(&source_han_sans_tc_17_regular);
-EpdFont notosans12BoldFont(&source_han_sans_tc_17_regular);
-EpdFont notosans12ItalicFont(&source_han_sans_tc_17_regular);
-EpdFont notosans12BoldItalicFont(&source_han_sans_tc_17_regular);
-EpdFontFamily notosans12FontFamily(&notosans12RegularFont, &notosans12BoldFont, &notosans12ItalicFont,
-                                   &notosans12BoldItalicFont);
-EpdFont notosans14RegularFont(&source_han_sans_tc_17_regular);
-EpdFont notosans14BoldFont(&source_han_sans_tc_17_regular);
-EpdFont notosans14ItalicFont(&source_han_sans_tc_17_regular);
-EpdFont notosans14BoldItalicFont(&source_han_sans_tc_17_regular);
-EpdFontFamily notosans14FontFamily(&notosans14RegularFont, &notosans14BoldFont, &notosans14ItalicFont,
-                                   &notosans14BoldItalicFont);
-EpdFont notosans16RegularFont(&source_han_sans_tc_17_regular);
-EpdFont notosans16BoldFont(&source_han_sans_tc_17_regular);
-EpdFont notosans16ItalicFont(&source_han_sans_tc_17_regular);
-EpdFont notosans16BoldItalicFont(&source_han_sans_tc_17_regular);
-EpdFontFamily notosans16FontFamily(&notosans16RegularFont, &notosans16BoldFont, &notosans16ItalicFont,
-                                   &notosans16BoldItalicFont);
-EpdFont notosans18RegularFont(&source_han_sans_tc_17_regular);
-EpdFont notosans18BoldFont(&source_han_sans_tc_17_regular);
-EpdFont notosans18ItalicFont(&source_han_sans_tc_17_regular);
-EpdFont notosans18BoldItalicFont(&source_han_sans_tc_17_regular);
-EpdFontFamily notosans18FontFamily(&notosans18RegularFont, &notosans18BoldFont, &notosans18ItalicFont,
-                                   &notosans18BoldItalicFont);
-
-// stage12.5: OpenDyslexic 字型砍掉（給閱讀障礙者用的英文字型，台灣不用）
-#endif  // OMIT_FONTS
-
-// UI 字型替換為 Source Han Sans TC（思源黑體 TC 子集，含繁中/簡中/英文 UI）
-// SMALL_FONT / UI_10 用 10pt，UI_12 用 12pt。
-EpdFont smallFont(&source_han_sans_tc_10_regular);
-EpdFontFamily smallFontFamily(&smallFont);
-
-EpdFont ui10RegularFont(&source_han_sans_tc_10_regular);
-EpdFont ui10BoldFont(&source_han_sans_tc_10_regular);  // 子集目前只產 Regular，Bold slot 共用
-EpdFontFamily ui10FontFamily(&ui10RegularFont, &ui10BoldFont);
-
-EpdFont ui12RegularFont(&source_han_sans_tc_12_regular);
-EpdFont ui12BoldFont(&source_han_sans_tc_12_regular);
-EpdFontFamily ui12FontFamily(&ui12RegularFont, &ui12BoldFont);
-
-// stage15.54: 17pt 書名 / reader 專用思源黑體 TC 常用字集子集
-//            供 LibraryCard / LyraFlow / RecentBooks grid 顯示書名時使用
-EpdFont reader17RegularFont(&source_han_sans_tc_17_regular);
-EpdFont reader17BoldFont(&source_han_sans_tc_17_regular);
-EpdFontFamily reader17FontFamily(&reader17RegularFont, &reader17BoldFont);
+// stage31: 字體系統整併
+// 全韌體只用 1 個字體實例（10pt 思源黑體 TC、5400+ 字常用字集）
+// 所有 font ID（UI_10/UI_12/SMALL/READER_17/BOOKERLY_*/NOTOSANS_*）都別名指向 RURU_FONT_ID
+// 詳見 src/fontIds.h
+EpdFont ruruRegularFont(&source_han_sans_tc_10_regular);
+EpdFont ruruBoldFont(&source_han_sans_tc_10_regular);  // 子集只產 Regular，Bold slot 共用
+EpdFontFamily ruruFontFamily(&ruruRegularFont, &ruruBoldFont);
 
 
 // measurement of power button press duration calibration value
@@ -326,24 +260,10 @@ void setupDisplayAndFonts() {
   display.begin();
   renderer.begin();
   Serial.printf("[%lu] [   ] Display initialized\n", millis());
-  renderer.insertFont(BOOKERLY_14_FONT_ID, bookerly14FontFamily);
-#ifndef OMIT_FONTS
-  renderer.insertFont(BOOKERLY_12_FONT_ID, bookerly12FontFamily);
-  renderer.insertFont(BOOKERLY_16_FONT_ID, bookerly16FontFamily);
-  renderer.insertFont(BOOKERLY_18_FONT_ID, bookerly18FontFamily);
-
-  renderer.insertFont(NOTOSANS_12_FONT_ID, notosans12FontFamily);
-  renderer.insertFont(NOTOSANS_14_FONT_ID, notosans14FontFamily);
-  renderer.insertFont(NOTOSANS_16_FONT_ID, notosans16FontFamily);
-  renderer.insertFont(NOTOSANS_18_FONT_ID, notosans18FontFamily);
-  // stage12.5: OpenDyslexic 字型砍掉（不再 insertFont）
-#endif  // OMIT_FONTS
-  // stage15.2: 17pt 書名專用字型
-  renderer.insertFont(READER_17_FONT_ID, reader17FontFamily);
-  renderer.insertFont(UI_10_FONT_ID, ui10FontFamily);
-  renderer.insertFont(UI_12_FONT_ID, ui12FontFamily);
-  renderer.insertFont(SMALL_FONT_ID, smallFontFamily);
-  Serial.printf("[%lu] [   ] Fonts setup\n", millis());
+  // stage31: 所有 font ID 都別名指向 RURU_FONT_ID，只插入一次
+  // UI_10/UI_12/SMALL/READER_17/BOOKERLY_*/NOTOSANS_* 全部解析為同個 ID
+  renderer.insertFont(RURU_FONT_ID, ruruFontFamily);
+  Serial.printf("[%lu] [   ] Fonts setup (stage31 single-font mode)\n", millis());
 }
 
 void setup() {
