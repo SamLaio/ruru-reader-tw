@@ -7,6 +7,10 @@
 #include <SDCardManager.h>
 #include <ZipFile.h>
 
+#include <algorithm>
+#include <cctype>
+#include <cstdlib>
+
 #include "Epub/parsers/ContainerParser.h"
 #include "Epub/parsers/ContentOpfParser.h"
 #include "Epub/parsers/TocNavParser.h"
@@ -15,6 +19,43 @@
 namespace {
 constexpr bool kDisableEpubCss = true;
 constexpr int kLargeBookSpineThreshold = 500;
+constexpr size_t MAX_LAYOUT_SCAN_BYTES = 64 * 1024;
+constexpr int MAX_SPINE_LAYOUT_SCAN_COUNT = 16;
+
+class LayoutScanPrint final : public Print {
+ public:
+  std::string text;
+  size_t write(uint8_t b) override {
+    if (text.size() < MAX_LAYOUT_SCAN_BYTES) {
+      text.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(b))));
+    }
+    return 1;
+  }
+};
+
+bool detectWritingModeInText(const std::string& text, CssWritingMode& mode) {
+  size_t propPos = text.find("writing-mode");
+  while (propPos != std::string::npos) {
+    const size_t valueEnd = std::min(text.size(), propPos + static_cast<size_t>(160));
+    const std::string valueArea = text.substr(propPos, valueEnd - propPos);
+    if (valueArea.find("vertical-rl") != std::string::npos || valueArea.find("tb-rl") != std::string::npos) {
+      mode = CssWritingMode::VerticalRl;
+      return true;
+    }
+    if (valueArea.find("vertical-lr") != std::string::npos || valueArea.find("tb-lr") != std::string::npos) {
+      mode = CssWritingMode::VerticalLr;
+      return true;
+    }
+    if (valueArea.find("horizontal-tb") != std::string::npos || valueArea.find("lr-tb") != std::string::npos ||
+        valueArea.find("rl-tb") != std::string::npos) {
+      mode = CssWritingMode::HorizontalTb;
+      return true;
+    }
+    propPos = text.find("writing-mode", propPos + 12);
+  }
+
+  return false;
+}
 }
 
 bool Epub::findContentOpfFile(std::string* contentOpfFile) const {
@@ -282,6 +323,62 @@ void Epub::parseCssFiles() const {
   }
 }
 
+void Epub::scanBookWritingMode() {
+  if (scannedBookWritingMode) {
+    return;
+  }
+  scannedBookWritingMode = true;
+  bookHasWritingMode = false;
+  bookWritingMode = CssWritingMode::HorizontalTb;
+
+  if (cssParser && cssParser->hasWritingMode()) {
+    bookHasWritingMode = true;
+    bookWritingMode = cssParser->getPrimaryWritingMode();
+    Serial.printf("[%lu] [EBP] Detected writing-mode from parsed CSS\n", millis());
+    return;
+  }
+
+  auto scanItem = [this](const std::string& href, const char* sourceLabel) -> bool {
+    LayoutScanPrint scanner;
+    scanner.text.reserve(4096);
+    if (!readItemContentsToStream(href, scanner, 512) || scanner.text.empty()) {
+      return false;
+    }
+
+    CssWritingMode detectedMode = CssWritingMode::HorizontalTb;
+    if (!detectWritingModeInText(scanner.text, detectedMode)) {
+      return false;
+    }
+
+    bookHasWritingMode = true;
+    bookWritingMode = detectedMode;
+    Serial.printf("[%lu] [EBP] Detected writing-mode from %s: %s\n", millis(), sourceLabel, href.c_str());
+    return true;
+  };
+
+  for (const auto& cssPath : cssFiles) {
+    if (scanItem(cssPath, "CSS file")) {
+      return;
+    }
+  }
+
+  const int scanCount = std::min(getSpineItemsCount(), MAX_SPINE_LAYOUT_SCAN_COUNT);
+  for (int i = 0; i < scanCount; ++i) {
+    if (scanItem(getSpineItem(i).href, "spine item")) {
+      return;
+    }
+  }
+
+  // stage27: 偵測不到 writing-mode 不要假裝「書有指定橫排」
+  // 原本強制 bookHasWritingMode=true + HorizontalTb 會讓 EpubReaderActivity 認為書明確說「橫排」
+  // 結果 useBookEmbeddedStyle=1 + bookStyleVertical=false 把使用者設定的「直排」蓋掉
+  // 現在保持 bookHasWritingMode=false，沒指定的書會走 readerSettingVertical（使用者設定）
+  bookHasWritingMode = false;
+  bookWritingMode = CssWritingMode::HorizontalTb;
+  Serial.printf("[%lu] [EBP] No EPUB writing-mode declaration detected, will follow user setting\n",
+                millis());
+}
+
 // load in the meta data for the epub file
 bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
   Serial.printf("[%lu] [EBP] Loading ePub: %s\n", millis(), filepath.c_str());
@@ -307,6 +404,12 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
         // continue anyway - book will work without CSS and we'll still load any inline style CSS
       }
       parseCssFiles();
+    }
+    // stage24: skipLoadingCss=true 表示只要 metadata（HomeActivity 載最近閱讀封面用）
+    // scanBookWritingMode 會對前 16 個 spine 做 ZIP 解壓掃寫向，多本書連續做容易 OOM 崩潰
+    // 真正開書時 EpubReaderActivity 會用 skipLoadingCss=false 再 load 一次，那時才掃
+    if (!effectiveSkipLoadingCss) {
+      scanBookWritingMode();
     }
     Serial.printf("[%lu] [EBP] Loaded ePub: %s\n", millis(), filepath.c_str());
     return true;
@@ -422,8 +525,9 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
   if (!effectiveSkipLoadingCss) {
     // Parse CSS files after cache reload
     parseCssFiles();
+    // stage24: 只在需要 CSS 的場景才掃寫向（避免 HomeActivity 載封面時 OOM）
+    scanBookWritingMode();
   }
-
   Serial.printf("[%lu] [EBP] Loaded ePub: %s\n", millis(), filepath.c_str());
   return true;
 }
@@ -545,6 +649,12 @@ void Epub::setupCacheDir() const {
 const std::string& Epub::getCachePath() const { return cachePath; }
 
 const std::string& Epub::getPath() const { return filepath; }
+
+bool Epub::hasCssWritingMode() const { return bookHasWritingMode || scannedBookWritingMode; }
+
+CssWritingMode Epub::getCssWritingMode() const {
+  return scannedBookWritingMode ? bookWritingMode : CssWritingMode::HorizontalTb;
+}
 
 const std::string& Epub::getTitle() const {
   static std::string blank;

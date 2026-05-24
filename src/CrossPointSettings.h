@@ -128,6 +128,7 @@ class CrossPointSettings {
   // stage15: LYRA / LYRA_3COVERS 砍掉，新增 LIBRARY_CARD（圖書館借書卡風）
   //          保留所有舊 enum 值避免破壞舊 settings.bin，UITheme.cpp 沒 case 會 fallback 到 LYRA_FLOW
   enum UI_THEME { CLASSIC = 0, LYRA = 1, LYRA_FLOW = 2, LYRA_3COVERS = 3, LIBRARY_CARD = 4 };
+  enum UI_LANGUAGE { LANGUAGE_ZH_TW = 0, LANGUAGE_ZH_CN = 1, LANGUAGE_EN = 2, UI_LANGUAGE_COUNT };
 
   // Sleep screen settings
   uint8_t sleepScreen = LIGHT;
@@ -200,6 +201,7 @@ uint8_t verticalLineOffset = 2;
 uint8_t horizontalLinePosition = LINE_BELOW;
   // Bluetooth enabled state (persistent)
   uint8_t bluetoothEnabled = 0;
+  uint8_t uiLanguage = LANGUAGE_ZH_TW;
 
 
  //阅读背景设置

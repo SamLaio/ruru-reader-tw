@@ -14,6 +14,6 @@
 #define UI_10_FONT_ID (-1246724383)
 #define UI_12_FONT_ID (-359249323)
 #define SMALL_FONT_ID (1073217904)
-// stage15.2: 17pt 書名專用字型（jfopenhuninn 粉圓、charset_full 11149 字）
+// stage15.54: 17pt 書名 / reader 專用字型（Source Han Sans TC、常用字集）
 //            供 LibraryCard / LyraFlow / RecentBooks grid 顯示書名時使用
 #define READER_17_FONT_ID (901660977)

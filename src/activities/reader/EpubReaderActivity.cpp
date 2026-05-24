@@ -970,7 +970,13 @@ void EpubReaderActivity::prefetchNextChapter() {
   const uint16_t viewportHeight = renderer.getScreenHeight() - orientedMarginTop - orientedMarginBottom;
   const bool readerSettingVertical = SETTINGS.textLayout == CrossPointSettings::TEXT_VERTICAL;
   const bool bookStyleVertical = epub && epub->hasCssWritingMode() && isVerticalWritingMode(epub->getCssWritingMode());
-  const bool verticalLayout = useBookEmbeddedStyle ? bookStyleVertical : readerSettingVertical;
+  // stage27.1: 書沒指定 writing-mode 時直接看使用者設定（不被 useBookEmbeddedStyle 蓋掉）
+  //   原本邏輯：useBookEmbeddedStyle=true 強制走 bookStyleVertical，而沒指定的書 bookStyleVertical=false
+  //   結果使用者設定的「直排」永遠被覆蓋成橫排
+  const bool bookHasExplicitWritingMode = epub && epub->hasCssWritingMode();
+  const bool verticalLayout = (useBookEmbeddedStyle && bookHasExplicitWritingMode)
+                                  ? bookStyleVertical
+                                  : readerSettingVertical;
 
   const uint32_t prefetchStart = millis();
   int builtCount = 0;
@@ -1092,7 +1098,13 @@ void EpubReaderActivity::renderScreen() {
 
   const bool readerSettingVertical = SETTINGS.textLayout == CrossPointSettings::TEXT_VERTICAL;
   const bool bookStyleVertical = epub && epub->hasCssWritingMode() && isVerticalWritingMode(epub->getCssWritingMode());
-  const bool verticalLayout = useBookEmbeddedStyle ? bookStyleVertical : readerSettingVertical;
+  // stage27.1: 書沒指定 writing-mode 時直接看使用者設定（不被 useBookEmbeddedStyle 蓋掉）
+  //   原本邏輯：useBookEmbeddedStyle=true 強制走 bookStyleVertical，而沒指定的書 bookStyleVertical=false
+  //   結果使用者設定的「直排」永遠被覆蓋成橫排
+  const bool bookHasExplicitWritingMode = epub && epub->hasCssWritingMode();
+  const bool verticalLayout = (useBookEmbeddedStyle && bookHasExplicitWritingMode)
+                                  ? bookStyleVertical
+                                  : readerSettingVertical;
   const bool backgroundVerticalLayout = readerSettingVertical || bookStyleVertical;
 
   if (!section) {
@@ -1161,7 +1173,17 @@ void EpubReaderActivity::renderScreen() {
 
 
   if (section->pageCount == 0) {
-    Serial.printf("[%lu] [ERS] No pages to render\n", millis());
+    Serial.printf("[%lu] [ERS] No pages to render (spine %d)\n", millis(), currentSpineIndex);
+    // stage22.5: Kobo 加工的 EPUB 第一個 spine 常常是 SVG 封面（無文字），渲染後 pageCount=0
+    // 自動往下找第一個非空 spine，避免畫面停在「Empty chapter」讓使用者誤以為打不開
+    const int spineCount = epub->getSpineItemsCount();
+    if (currentSpineIndex + 1 < spineCount) {
+      Serial.printf("[%lu] [ERS] Auto-skip empty section, jump to spine %d\n", millis(), currentSpineIndex + 1);
+      currentSpineIndex += 1;
+      nextPageNumber = 0;
+      section.reset();
+      return renderScreen();
+    }
     renderer.drawCenteredText(UI_12_FONT_ID, 300, getChineseName("Empty chapter"), true, EpdFontFamily::BOLD);
     renderStatusBar(orientedMarginRight, orientedMarginBottom,orientedMarginTop, orientedMarginLeft);
     renderer.displayBuffer();
@@ -1569,7 +1591,13 @@ void EpubReaderActivity::preScanAllChapters() {
   const uint16_t viewportHeight = renderer.getScreenHeight() - orientedMarginTop - orientedMarginBottom;
   const bool readerSettingVertical = SETTINGS.textLayout == CrossPointSettings::TEXT_VERTICAL;
   const bool bookStyleVertical = epub && epub->hasCssWritingMode() && isVerticalWritingMode(epub->getCssWritingMode());
-  const bool verticalLayout = useBookEmbeddedStyle ? bookStyleVertical : readerSettingVertical;
+  // stage27.1: 書沒指定 writing-mode 時直接看使用者設定（不被 useBookEmbeddedStyle 蓋掉）
+  //   原本邏輯：useBookEmbeddedStyle=true 強制走 bookStyleVertical，而沒指定的書 bookStyleVertical=false
+  //   結果使用者設定的「直排」永遠被覆蓋成橫排
+  const bool bookHasExplicitWritingMode = epub && epub->hasCssWritingMode();
+  const bool verticalLayout = (useBookEmbeddedStyle && bookHasExplicitWritingMode)
+                                  ? bookStyleVertical
+                                  : readerSettingVertical;
 
   // 顯示初始 popup
   Rect popupRect = GUI.drawPopup(renderer, "讀取全書中...");

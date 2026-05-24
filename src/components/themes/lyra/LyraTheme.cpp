@@ -398,7 +398,8 @@ void LyraTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
 
 void LyraTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount, int selectedIndex,
                                const std::function<std::string(int index)>& buttonLabel,
-                               const std::function<UIIcon(int index)>& /*rowIcon*/) const {
+                               const std::function<UIIcon(int index)>& /*rowIcon*/,
+                               int /*sdDirCount*/) const {
   for (int i = 0; i < buttonCount; ++i) {
     int tileWidth = (rect.width - LyraMetrics::values.contentSidePadding * 2 - LyraMetrics::values.menuSpacing) / 2;
     Rect tileRect =

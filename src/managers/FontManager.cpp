@@ -266,6 +266,17 @@ EpdFontFamily* FontManager::getCustomFontFamily(const std::string& familyName, i
     return loadedFonts[familyName][fontSize];
   }
 
+  // stage28: 載入新字型前先把其他字型釋放掉，避免切字型時舊+新同時佔 RAM
+  //   原本 loadedFonts 是 singleton 永不釋放，每換一次字型就累積一份在 heap
+  //   現在切到新字型時，只保留正要載入的那一個 family
+  for (auto& familyPair : loadedFonts) {
+    if (familyPair.first == familyName) continue;
+    for (auto& sizePair : familyPair.second) {
+      delete sizePair.second;
+    }
+    familyPair.second.clear();
+  }
+
   String basePath = "/fonts/" + String(familyName.c_str()) + "-";
   String sizeStr = String(fontSize);
 

@@ -20,10 +20,10 @@ void readAndValidate(FsFile& file, uint8_t& member, const uint8_t maxValue) {
 }
 
 namespace {
-// stage15.46: 版本升到 8（上方/下方/直排劃線間距分開存）
-constexpr uint8_t SETTINGS_FILE_VERSION = 8;
+// stage15.48: 版本升到 9（新增 UI 語言）
+constexpr uint8_t SETTINGS_FILE_VERSION = 9;
 // 注意：如果修改了字段数量，需要同步更新这个值
-constexpr uint8_t SETTINGS_COUNT = 53;
+constexpr uint8_t SETTINGS_COUNT = 54;
 constexpr char SETTINGS_FILE[] = "/.crosspoint/settings.bin";
 
 // Validate front button mapping to ensure each hardware button is unique.
@@ -143,6 +143,7 @@ bool CrossPointSettings::saveToFile() const {
   serialization::writePod(outputFile, underlineBelowOffset);
   serialization::writePod(outputFile, underlineAboveOffset);
   serialization::writePod(outputFile, verticalLineOffset);
+  serialization::writePod(outputFile, uiLanguage);
   // New fields added at end for backward compatibility
   outputFile.close();
 
@@ -159,7 +160,7 @@ bool CrossPointSettings::loadFromFile() {
   uint8_t version;
   serialization::readPod(inputFile, version);
   // stage15.46: 允許舊版設定檔，缺欄位走 fallback 預設值
-  if (version != 5 && version != 6 && version != 7 && version != SETTINGS_FILE_VERSION) {
+  if (version != 5 && version != 6 && version != 7 && version != 8 && version != SETTINGS_FILE_VERSION) {
     Serial.printf("[%lu] [CPS] Deserialization failed: Unknown version %u\n", millis(), version);
     inputFile.close();
     return false;
@@ -341,6 +342,10 @@ bool CrossPointSettings::loadFromFile() {
       underlineBelowOffset = underlineOffset;
       underlineAboveOffset = underlineOffset;
       verticalLineOffset = underlineOffset;
+    }
+    if (version >= 9) {
+      readAndValidate(inputFile, uiLanguage, UI_LANGUAGE_COUNT);
+      if (++settingsRead >= fileSettingsCount) break;
     }
     // New fields added at end for backward compatibility
   } while (false);

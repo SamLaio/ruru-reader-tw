@@ -754,9 +754,9 @@ int readerVerticalSpacingPx(const uint8_t wordSpacing) {
 }
 
 int verticalEffectiveCharHeight(const int fontLineHeight, const int visualHeight, const float lineCompression) {
-  const int compressedLineHeight = static_cast<int>(fontLineHeight * lineCompression);
-  const int adjusted = visualHeight + (compressedLineHeight - fontLineHeight);
-  return std::max(visualHeight, adjusted);
+  (void)fontLineHeight;
+  (void)lineCompression;
+  return std::max(1, visualHeight);
 }
 
 void applyVerticalAlignment(std::list<uint16_t>& ypos, const int lineHeight, const int charAdvance,

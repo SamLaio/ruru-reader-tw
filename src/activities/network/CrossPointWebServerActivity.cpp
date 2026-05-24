@@ -8,10 +8,13 @@
 
 #include <cstddef>
 
+#include <BluetoothHIDManager.h>
 #include "MappedInputManager.h"
 #include "NetworkModeSelectionActivity.h"
 #include "WifiSelectionActivity.h"
+#ifndef DISABLE_CALIBRE
 #include "activities/network/CalibreConnectActivity.h"
+#endif
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "network/NetworkConstants.h"
@@ -23,6 +26,15 @@ using namespace NetworkConstants;
 namespace {
 // DNS server for captive portal (redirects all DNS queries to our IP)
 DNSServer* dnsServer = nullptr;
+
+void disableBluetoothBeforeWifi(const char* tag) {
+  auto& btMgr = BluetoothHIDManager::getInstance();
+  if (btMgr.isEnabled()) {
+    Serial.printf("[%lu] [%s] Disabling Bluetooth before WiFi start\n", millis(), tag);
+    btMgr.disable();
+    delay(100);
+  }
+}
 }  // namespace
 
 void CrossPointWebServerActivity::taskTrampoline(void* param) {
@@ -47,7 +59,7 @@ void CrossPointWebServerActivity::onEnter() {
   updateRequired = true;
 
   xTaskCreate(&CrossPointWebServerActivity::taskTrampoline, "WebServerActivityTask",
-              2048,               // Stack size
+              8192,               // Stack size
               this,               // Parameters
               1,                  // Priority
               &displayTaskHandle  // Task handle
@@ -124,9 +136,12 @@ void CrossPointWebServerActivity::onExit() {
 
 void CrossPointWebServerActivity::onNetworkModeSelected(const NetworkMode mode) {
   const char* modeName = "Join Network";
+#ifndef DISABLE_CALIBRE
   if (mode == NetworkMode::CONNECT_CALIBRE) {
     modeName = "Connect to Calibre";
-  } else if (mode == NetworkMode::CREATE_HOTSPOT) {
+  } else
+#endif
+  if (mode == NetworkMode::CREATE_HOTSPOT) {
     modeName = "Create Hotspot";
   }
   Serial.printf("[%lu] [WEBACT] Network mode selected: %s\n", millis(), modeName);
@@ -137,6 +152,7 @@ void CrossPointWebServerActivity::onNetworkModeSelected(const NetworkMode mode) 
   // Exit mode selection subactivity
   exitActivity();
 
+#ifndef DISABLE_CALIBRE
   if (mode == NetworkMode::CONNECT_CALIBRE) {
     exitActivity();
     enterNewActivity(new CalibreConnectActivity(renderer, mappedInput, [this] {
@@ -148,6 +164,7 @@ void CrossPointWebServerActivity::onNetworkModeSelected(const NetworkMode mode) 
     }));
     return;
   }
+#endif
 
   if (mode == NetworkMode::JOIN_NETWORK) {
     // STA mode - launch WiFi selection
@@ -197,6 +214,8 @@ void CrossPointWebServerActivity::onWifiSelectionComplete(const bool connected) 
 void CrossPointWebServerActivity::startAccessPoint() {
   Serial.printf("[%lu] [WEBACT] Starting Access Point mode...\n", millis());
   Serial.printf("[%lu] [WEBACT] [MEM] Free heap before AP start: %d bytes\n", millis(), ESP.getFreeHeap());
+
+  disableBluetoothBeforeWifi("WEBACT");
 
   // Configure and start the AP
   WiFi.mode(WIFI_AP);

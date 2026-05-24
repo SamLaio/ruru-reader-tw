@@ -8,10 +8,11 @@
 #include "components/themes/BaseTheme.h"
 #include "components/themes/lyra/LyraTheme.h"
 #include "components/themes/lyra/LyraFlowTheme.h"
+#include "components/themes/monoink/MonoInkTheme.h"
 // stage5.5/stage12.5: RoundedRaff 圓角 theme 砍掉
 // stage15: Lyra（基本款）和 Lyra3Covers（三封面）砍掉
 // stage15.11: LibraryCardTheme 砍掉、合併進 LyraFlowTheme（Flow + 卡風）
-//             只剩一個 theme = LyraFlow（內含卡號 + 撕邊裝飾）
+// MonoInk: 效能優先 × 黑白強對比 theme
 
 UITheme UITheme::instance;
 
@@ -26,11 +27,10 @@ void UITheme::reload() {
 }
 
 void UITheme::setTheme(CrossPointSettings::UI_THEME /*type*/) {
-  // stage15.29 (嚕寶要求回復原本 FLOW THEME):
-  //   回到 LyraFlowTheme（FLOW carousel 斜邊 + ICON menu）
-  Serial.printf("[%lu] [UI] Using Lyra Flow theme (FLOW carousel + ICON menu)\n", millis());
-  currentTheme = new LyraFlowTheme();
-  currentMetrics = &LyraFlowMetrics::values;
+  // MonoInk: 效能優先 × 黑白強對比
+  Serial.printf("[%lu] [UI] Using MonoInk theme (high-contrast b/w)\n", millis());
+  currentTheme = new MonoInkTheme();
+  currentMetrics = &MonoInkMetrics::values;
 }
 
 int UITheme::getNumberOfItemsPerPage(const GfxRenderer& renderer, bool hasHeader, bool hasTabBar, bool hasButtonHints,

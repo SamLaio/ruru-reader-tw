@@ -7,6 +7,7 @@
 #include "fontIds.h"
 
 namespace {
+#ifndef DISABLE_CALIBRE
 constexpr int MENU_ITEM_COUNT = 3;
 const char* MENU_ITEMS[MENU_ITEM_COUNT] = {"加入網路", "連線到 Calibre", "建立熱點"};
 const char* MENU_DESCRIPTIONS[MENU_ITEM_COUNT] = {
@@ -14,6 +15,14 @@ const char* MENU_DESCRIPTIONS[MENU_ITEM_COUNT] = {
     "使用 Calibre 無線裝置傳輸",
     "x4建立熱點，使用手機連線傳書",
 };
+#else
+constexpr int MENU_ITEM_COUNT = 2;
+const char* MENU_ITEMS[MENU_ITEM_COUNT] = {"加入網路", "建立熱點"};
+const char* MENU_DESCRIPTIONS[MENU_ITEM_COUNT] = {
+    "連線到現有的 WiFi 網路",
+    "x4建立熱點，使用手機連線傳書",
+};
+#endif
 }  // namespace
 
 void NetworkModeSelectionActivity::taskTrampoline(void* param) {
@@ -63,11 +72,17 @@ void NetworkModeSelectionActivity::loop() {
   // Handle confirm button - select current option
   if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
     NetworkMode mode = NetworkMode::JOIN_NETWORK;
+#ifndef DISABLE_CALIBRE
     if (selectedIndex == 1) {
       mode = NetworkMode::CONNECT_CALIBRE;
     } else if (selectedIndex == 2) {
       mode = NetworkMode::CREATE_HOTSPOT;
     }
+#else
+    if (selectedIndex == 1) {
+      mode = NetworkMode::CREATE_HOTSPOT;
+    }
+#endif
     onModeSelected(mode);
     return;
   }

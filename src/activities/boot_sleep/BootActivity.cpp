@@ -17,6 +17,6 @@ void BootActivity::onEnter() {
   renderer.drawImage(RabbitLarge, (pageWidth - 128) / 2, (pageHeight - 128) / 2, 128, 128);
   renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 + 70, "RURU-READER", true, EpdFontFamily::BOLD);
   renderer.drawCenteredText(SMALL_FONT_ID, pageHeight / 2 + 95, "啟動中...");
-  renderer.drawCenteredText(SMALL_FONT_ID, pageHeight - 30, CROSSPOINT_VERSION);
+  renderer.drawCenteredText(SMALL_FONT_ID, pageHeight - 60, CROSSPOINT_VERSION);
   renderer.displayBuffer();
 }

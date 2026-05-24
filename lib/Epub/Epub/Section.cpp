@@ -180,8 +180,8 @@ bool selfCloseVoidElementsInHtmlFile(const std::string& src, const std::string& 
 }  // namespace (HTML void-element preprocessor)
 
 namespace {
-// stage15.14: bump 到 14（加 verticalLayout 欄位）、舊 cache 失效自動重建
-constexpr uint8_t SECTION_FILE_VERSION = 16;  // stage15.37: cache key 加 fontLineHeight，避免同名自定義字型換檔沿用舊分頁
+// stage15.52: bump 到 17（直排行距/字距軸向修正）、舊 cache 失效自動重建
+constexpr uint8_t SECTION_FILE_VERSION = 17;
 constexpr uint32_t HEADER_SIZE = sizeof(uint8_t) + sizeof(int) + sizeof(uint16_t) + sizeof(float) + sizeof(bool) + sizeof(uint8_t) +
                                  sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(bool) +
                                  sizeof(uint8_t)+sizeof(bool)+ sizeof(bool) +

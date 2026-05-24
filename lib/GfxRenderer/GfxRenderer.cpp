@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <cstring>
+#include <vector>
 
 #include <Utf8.h>
 #include <SDCardManager.h>
@@ -537,8 +539,16 @@ void GfxRenderer::drawVerticalText(const int fontId, const int x, const int y, c
     const uint32_t fallbackCp = fallbackVerticalSourceCodepoint(cp);
     const EpdGlyph* glyph = font.getGlyph(mappedCp, style);
 
+    // stage27: 長標點強制 fallback —
+    //   刪節號 …、破折號 —/―、雙縱線 ‖、垂直線 | 在直排時必須轉成直立版本
+    //   如果字型沒對應的 FE19/FE31/FE33/FE34，就算字型有橫向版也不能直接畫（會橫躺）
+    //   改用線條 fallback 畫成直立的三點 / 直線
+    const bool isLongVerticalPunct =
+        (cp == 0x2026 || cp == 0x2014 || cp == 0x2015 || cp == 0x2016 || cp == 0x007C || cp == 0xFF5C);
+    const bool needForcedFallback = glyph && isLongVerticalPunct && (mappedCp == cp);
+
     // 直排標點 fallback：字型缺直排碼點、原始標點，或 EPUB 已給 FE** 直排碼點時都能畫。
-    if (!glyph && fallbackCp != 0 &&
+    if ((!glyph || needForcedFallback) && fallbackCp != 0 &&
         drawFallbackVerticalForm(*this, fallbackCp, x, cellTop, colWidth, lineHeight, black)) {
       cellTop += lineHeight;
       continue;
@@ -1104,6 +1114,14 @@ void GfxRenderer::displayBuffer(const HalDisplay::RefreshMode refreshMode) const
   auto elapsed = millis() - start_ms;
   Serial.printf("[%lu] [GFX] Time = %lu ms from clearScreen to displayBuffer\n", millis(), elapsed);
   display.displayBuffer(refreshMode, fadingFix);
+}
+
+void GfxRenderer::displayBufferClean() const {
+  // stage27.1: 直接雙刷不 backup buffer，避免 OOM
+  //   原本配 48KB std::vector backup 在 framebuffer 髒掉前先存，自訂字型載入後 RAM 緊張會崩
+  //   現在直接同樣內容刷兩次，犧牲一點清屏效果換穩定
+  display.displayBuffer(HalDisplay::FAST_REFRESH, false);
+  display.displayBuffer(HalDisplay::FAST_REFRESH, fadingFix);
 }
 
 std::string GfxRenderer::truncatedText(const int fontId, const char* text, const int maxWidth,

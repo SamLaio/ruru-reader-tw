@@ -174,7 +174,8 @@ class BaseTheme {
                                    const BookReadingStats* stats = nullptr, float progressPercent = -1.0f) const;
   virtual void drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount, int selectedIndex,
                               const std::function<std::string(int index)>& buttonLabel,
-                              const std::function<UIIcon(int index)>& rowIcon) const;
+                              const std::function<UIIcon(int index)>& rowIcon,
+                              int sdDirCount = 0) const;
   virtual Rect drawPopup(const GfxRenderer& renderer, const char* message) const;
   virtual void fillPopupProgress(const GfxRenderer& renderer, const Rect& layout, const int progress) const;
   virtual void drawStatusBar(GfxRenderer& renderer, const float bookProgress, const int currentPage,

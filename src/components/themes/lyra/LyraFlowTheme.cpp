@@ -379,7 +379,8 @@ void LyraFlowTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const 
 
 void LyraFlowTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount, int selectedIndex,
                                    const std::function<std::string(int index)>& buttonLabel,
-                                   const std::function<UIIcon(int index)>& rowIcon) const {
+                                   const std::function<UIIcon(int index)>& rowIcon,
+                                   int /*sdDirCount*/) const {
   // stage15.17 + 15.18: 改成 2x2 grid + icon
   //   嚕寶要的 4 格：挑選一本書 / 最近閱讀 / Wifi / 設定（4 個主要功能）
   //   每格佔半寬、上半畫 icon、下半畫文字、選中那格加圓角灰底

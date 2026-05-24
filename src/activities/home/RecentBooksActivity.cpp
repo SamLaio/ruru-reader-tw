@@ -100,9 +100,11 @@ void RecentBooksActivity::loadRecentBooks() {
   const auto& books = RECENT_BOOKS.getBooks();
   recentBooks.reserve(books.size());
 
+  int skippedMissing = 0;
   for (const auto& book : books) {
     // Skip if file no longer exists
     if (!SdMan.exists(book.path.c_str())) {
+      skippedMissing++;
       continue;
     }
     recentBooks.push_back(book);
@@ -110,6 +112,16 @@ void RecentBooksActivity::loadRecentBooks() {
     int progressPercent = 0;
     if (tryReadEpubBookProgressPercent(recentBooks.back().path, progressPercent)) {
       recentBooks.back().progressPercent = progressPercent;
+    }
+  }
+
+  // stage15.57: 若 SD exists 在開機後全部誤判，最近閱讀頁不要跟 Flow 一起變空白。
+  if (recentBooks.empty() && !books.empty()) {
+    Serial.printf("[%lu] [RECENT] All recent paths failed exists check (%d). Keeping recent list.\n",
+                  millis(), skippedMissing);
+    for (const auto& book : books) {
+      recentBooks.push_back(book);
+      recentBooks.back().progressPercent = -1;
     }
   }
 }

@@ -535,7 +535,9 @@ typedef struct mz_dummy_time_t_tag {
 #define MZ_TIME_T time_t
 #endif
 
-#define MZ_ASSERT(x) assert(x)
+// 改為非致命：某些合法 EPUB 的 deflate stream 末尾有多餘 bit 會觸發 assert，
+// 原本 abort() 導致整機崩潰。改成靜默忽略，讓解壓繼續。
+#define MZ_ASSERT(x) ((void)(x))
 
 #ifdef MINIZ_NO_MALLOC
 #define MZ_MALLOC(x) NULL

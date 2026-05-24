@@ -43,7 +43,8 @@ class LyraFlowTheme : public LyraTheme {
   // when the cursor crosses page 2's top boundary.
   void drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount, int selectedIndex,
                       const std::function<std::string(int index)>& buttonLabel,
-                      const std::function<UIIcon(int index)>& rowIcon) const override;
+                      const std::function<UIIcon(int index)>& rowIcon,
+                      int sdDirCount = 0) const override;
 
  private:
   // Tracks "is page 2 currently shown" across renders. mutable because

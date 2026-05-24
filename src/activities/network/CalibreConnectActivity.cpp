@@ -1,3 +1,4 @@
+#ifndef DISABLE_CALIBRE
 #include "CalibreConnectActivity.h"
 
 #include <ESPmDNS.h>
@@ -273,3 +274,4 @@ void CalibreConnectActivity::renderServerRunning() const {
   const auto labels = mappedInput.mapLabels("« 返回", "", "", "");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
+#endif

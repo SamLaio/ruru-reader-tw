@@ -1,6 +1,8 @@
 #pragma once
 
 #include <Arduino.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 #include <string>
 #include <vector>
 #include <functional>
@@ -16,8 +18,8 @@ struct BluetoothDevice {
   std::string address;
   std::string name;
   int rssi;
+  uint8_t addressType = 0;
   bool isHID = false;
-  uint8_t addressType = 0;  // 0=PUBLIC, 1=RANDOM (從掃描取得，避免 connect 寫死類型)
 };
 
 struct ConnectedDevice {
@@ -34,6 +36,14 @@ struct ConnectedDevice {
   const DeviceProfiles::DeviceProfile* profile = nullptr;  // Device-specific HID profile
 };
 
+struct BluetoothKeyMapping {
+  std::string address;
+  uint8_t reportLength = 0;
+  uint8_t byteIndex = 0;
+  uint8_t keycode = 0;
+  uint8_t targetButton = 0xFF;
+};
+
 class BluetoothHIDManager {
 public:
   // Singleton access
@@ -48,13 +58,8 @@ public:
   void startScan(uint32_t durationMs = 10000);
   void stopScan();
   bool isScanning() const { return _scanning; }
-  void _setScanningFinished() { _scanning = false; }  // 給 ScanCallbacks::onScanEnd 用
-
-  // [stage9.1] UI 操作中標記 — 進藍芽設定頁時 set true，離開 set false
-  // 用於暫停 auto-reconnect，避免使用者要連新裝置時 reader 卻在嘗試連舊裝置而卡住 UI
-  void setUiBluetoothActive(bool active) { _uiBluetoothActive = active; }
-  bool isUiBluetoothActive() const { return _uiBluetoothActive; }
-  const std::vector<BluetoothDevice>& getDiscoveredDevices() const { return _discoveredDevices; }
+  std::vector<BluetoothDevice> getDiscoveredDevicesSnapshot() const;
+  void releaseTransientCaches();
 
   // Connection
   bool connectToDevice(const std::string& address);
@@ -72,6 +77,12 @@ public:
   void processInputEvents();
   void setInputCallback(std::function<void(uint16_t keycode)> callback);
   void setButtonInjector(std::function<void(uint8_t buttonIndex)> injector);
+  void beginKeymapLearning(uint8_t targetButton);
+  void cancelKeymapLearning();
+  bool isKeymapLearning() const;
+  bool consumeLastLearnedMapping(BluetoothKeyMapping& mapping);
+  std::vector<BluetoothKeyMapping> getKeyMappings() const;
+  void clearKeyMappings();
   void updateActivity();  // Call periodically to check inactivity timeout
   void checkAutoReconnect();  // Auto-reconnect to previously connected devices if disconnected
   
@@ -84,11 +95,13 @@ public:
   void loadState();
   void saveLastConnectedDevice(const std::string& address, const std::string& name);
   bool loadLastConnectedDevice(std::string& address, std::string& name);
+  void saveKeyMappings();
+  void loadKeyMappings();
 
   std::string lastError;
-  //防止崩溃，让外部可读取信息
+  //防止崩潰，讓外部可讀取資訊
   void onScanResult(NimBLEAdvertisedDevice* advertisedDevice);
-  void onClientDisconnected(const std::string& address);
+  void handleClientDisconnect(NimBLEClient* pClient, int reason);
 
 private:
 
@@ -103,21 +116,32 @@ private:
   BluetoothHIDManager& operator=(const BluetoothHIDManager&) = delete;
 
   void cleanup();
+  bool lockState(TickType_t ticks = portMAX_DELAY) const;
+  void unlockState() const;
   uint16_t parseHIDReport(uint8_t* data, size_t length);
   ConnectedDevice* findConnectedDevice(const std::string& address);
-  uint8_t mapKeycodeToButton(uint8_t keycode, const DeviceProfiles::DeviceProfile* profile);
-  void pruneDisconnectedDevices(bool logDetails = false);
+  uint8_t mapKeycodeToButton(const ConnectedDevice& device, uint8_t reportLength, uint8_t byteIndex, uint8_t keycode);
+  const BluetoothKeyMapping* findKeyMapping(const std::string& address, uint8_t reportLength, uint8_t byteIndex,
+                                            uint8_t keycode) const;
+  void learnKeyMapping(const std::string& address, uint8_t reportLength, uint8_t byteIndex, uint8_t keycode);
 
   bool _enabled = false;
   bool _scanning = false;
+  unsigned long _scanEndTime = 0;
   std::vector<BluetoothDevice> _discoveredDevices;
   std::vector<ConnectedDevice> _connectedDevices;
+  std::vector<BluetoothKeyMapping> _keyMappings;
+  // 從 bt_state.bin 還原的待重連清單（address, name）
+  // checkAutoReconnect 會從這裡取出並嘗試連線
+  std::vector<std::pair<std::string, std::string>> _restoredDevices;
+  mutable SemaphoreHandle_t _stateMutex = nullptr;
   std::function<void(uint16_t)> _inputCallback;
   std::function<void(uint8_t)> _buttonInjector;
-  
+  uint8_t _learningTargetButton = 0xFF;
+  bool _hasLastLearnedMapping = false;
+  BluetoothKeyMapping _lastLearnedMapping;
+
   // Inactivity timeout (milliseconds)
   static constexpr unsigned long INACTIVITY_TIMEOUT_MS = 120000;  // 2 minutes
   unsigned long lastMaintenanceCheck = 0;
-  unsigned long _manualDisconnectSuppressUntil = 0;
-  bool _uiBluetoothActive = false;  // [stage9.1] 使用者在藍芽設定 UI 中時為 true，期間暫停 auto-reconnect
 };

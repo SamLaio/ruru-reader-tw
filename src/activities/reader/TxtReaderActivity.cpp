@@ -5,12 +5,15 @@
 #include <Serialization.h>
 #include <Utf8.h>
 
+#include <cctype>
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
+#include "LanguageMapper.h"
 #include "MappedInputManager.h"
 #include "RecentBooksStore.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/AtomicFileWriter.h"
 
 #include "TxtReaderChapterSelectionActivity.h"
 
@@ -19,10 +22,34 @@ constexpr unsigned long goHomeMs = 1000;
 constexpr int statusBarMargin = 20;
 constexpr int progressBarMarginTop = 1;
 constexpr size_t CHUNK_SIZE = 8 * 1024;  // 8KB chunk for reading
+constexpr char READER_SLEEP_EXCERPT_PATH[] = "/.crosspoint/reader_sleep_excerpt.txt";
 
 // Cache file magic and version
 constexpr uint32_t CACHE_MAGIC = 0x54585449;  // "TXTI"
 constexpr uint8_t CACHE_VERSION = 4;          // Increment when cache format changes
+
+std::string normalizeSleepExcerptLine(const std::string& text) {
+  std::string out;
+  out.reserve(text.size());
+  bool previousSpace = true;
+  for (const char ch : text) {
+    const auto uch = static_cast<unsigned char>(ch);
+    const bool space = std::isspace(uch) != 0;
+    if (space) {
+      if (!previousSpace) {
+        out.push_back(' ');
+      }
+      previousSpace = true;
+      continue;
+    }
+    out.push_back(ch);
+    previousSpace = false;
+  }
+  while (!out.empty() && out.back() == ' ') {
+    out.pop_back();
+  }
+  return out;
+}
 
 int readerVerticalSpacingPx(const uint8_t wordSpacing) {
   return static_cast<int>(wordSpacing) * 2;
@@ -415,7 +442,7 @@ void TxtReaderActivity::buildPageIndex(size_t beginByte, size_t endByte) {
   Serial.printf("[%lu] [TRS] Building page index from %zu to %zu bytes...\n", 
                 millis(), beginByte, endByte);
 
-  GUI.drawPopup(renderer, "Indexing...");
+  GUI.drawPopup(renderer, getChineseName("Indexing..."));
 
   // 3. 循环终止条件改为：offset < endByte
   while (offset < endByte) {
@@ -826,7 +853,7 @@ void TxtReaderActivity::renderScreen() {
 
   if (pageOffsets.empty()) {
     renderer.clearScreen();
-    renderer.drawCenteredText(UI_12_FONT_ID, 300, "Empty file", true, EpdFontFamily::BOLD);
+    renderer.drawCenteredText(UI_12_FONT_ID, 300, getChineseName("Empty file"), true, EpdFontFamily::BOLD);
     renderer.displayBuffer();
     return;
   }
@@ -845,6 +872,7 @@ void TxtReaderActivity::renderScreen() {
     endoffset = txt->getFileSize();
   }
   loadPageAtOffset(offset,endoffset, currentPageLines, nextOffset);
+  saveSleepExcerptFromCurrentLines();
 
   renderer.clearScreen();
   renderPage();
@@ -853,6 +881,32 @@ void TxtReaderActivity::renderScreen() {
 }
 
 
+
+void TxtReaderActivity::saveSleepExcerptFromCurrentLines() const {
+  if (!txt) {
+    return;
+  }
+
+  std::string excerpt;
+  excerpt.reserve(192);
+  for (const auto& rawLine : currentPageLines) {
+    const std::string line = normalizeSleepExcerptLine(rawLine);
+    if (line.empty()) {
+      continue;
+    }
+    if (!excerpt.empty()) {
+      excerpt.push_back(' ');
+    }
+    excerpt += line;
+    if (excerpt.size() >= 180) {
+      break;
+    }
+  }
+
+  SdMan.mkdir("/.crosspoint");
+  const std::string payload = txt->getPath() + "\n" + excerpt;
+  writeTextFileAtomic("TRS", READER_SLEEP_EXCERPT_PATH, payload);
+}
 
 void TxtReaderActivity::renderStatusBar(const int orientedMarginRight, const int orientedMarginBottom,
                                         const int orientedMarginTop, const int orientedMarginLeft) const {
@@ -942,21 +996,17 @@ void TxtReaderActivity::renderStatusBar(const int orientedMarginRight, const int
 }
 
 void TxtReaderActivity::saveProgress() const {
+  uint8_t data[8];
+  data[0] = currentPage & 0xFF;
+  data[1] = (currentPage >> 8) & 0xFF;
+  data[2] = 0;
+  data[3] = 0;
 
-  FsFile f;
-  if (SdMan.openFileForWrite("TRS", txt->getCachePath() + "/progress.bin", f)) {
-    uint8_t data[8];
-    data[0] = currentPage & 0xFF;
-    data[1] = (currentPage >> 8) & 0xFF;
-    data[2] = 0;
-    data[3] = 0;
-
-    data[4] = chapternum & 0xFF;
-    data[5] = (chapternum >> 8) & 0xFF;
-    data[6] = 0;
-    data[7] = 0;
-    f.write(data, 8);
-    f.close();
+  data[4] = chapternum & 0xFF;
+  data[5] = (chapternum >> 8) & 0xFF;
+  data[6] = 0;
+  data[7] = 0;
+  if (writeBinaryFileAtomic("TRS", txt->getCachePath() + "/progress.bin", data, sizeof(data))) {
     Serial.printf("[%lu] [TRS] saveed progress: page %d/%d, chapter %d\n", millis(), currentPage, totalPages, chapternum);
   }
 }

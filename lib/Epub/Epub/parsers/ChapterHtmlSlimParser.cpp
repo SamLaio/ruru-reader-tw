@@ -7,6 +7,8 @@
 #include <SDCardManager.h>
 #include <expat.h>
 
+#include <algorithm>
+
 #include "../Page.h"
 
 #include"../../Epub.h"
@@ -31,10 +33,13 @@ constexpr int NUM_ITALIC_TAGS = sizeof(ITALIC_TAGS) / sizeof(ITALIC_TAGS[0]);
 const char* UNDERLINE_TAGS[] = {"u", "ins"};
 constexpr int NUM_UNDERLINE_TAGS = sizeof(UNDERLINE_TAGS) / sizeof(UNDERLINE_TAGS[0]);
 
-const char* IMAGE_TAGS[] = {"img"};
+// stage23: "image" 是 SVG 內嵌圖片標籤（Kobo 加工過的 EPUB 封面常用 <svg><image xlink:href="..."/></svg>）
+const char* IMAGE_TAGS[] = {"img", "image"};
 constexpr int NUM_IMAGE_TAGS = sizeof(IMAGE_TAGS) / sizeof(IMAGE_TAGS[0]);
 
-const char* SKIP_TAGS[] = {"head"};
+// stage23: 加入 script / style / noscript，避免 Kobo / Sigil 加工過的 EPUB
+// 在 body 內塞 inline <script> 或 <style> 造成 CSS 規則漏到內文渲染區
+const char* SKIP_TAGS[] = {"head", "script", "style", "noscript"};
 constexpr int NUM_SKIP_TAGS = sizeof(SKIP_TAGS) / sizeof(SKIP_TAGS[0]);
 
 bool isWhitespace(const char c) { return c == ' ' || c == '\r' || c == '\n' || c == '\t'; }
@@ -170,6 +175,9 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
           src = atts[i + 1];
         } else if (strcmp(atts[i], "alt") == 0) {
           alt = atts[i + 1];
+        } else if (src.empty() && (strcmp(atts[i], "xlink:href") == 0 || strcmp(atts[i], "href") == 0)) {
+          // stage23: SVG <image xlink:href="..."/> 是 Kobo 加工封面用法
+          src = atts[i + 1];
         }
       }
     if(!src.empty()){
@@ -877,17 +885,21 @@ void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line) {
 //   原本用 getTextWidth("我") — 但粗香菜字寬不均、有些字比「我」寬
 //   → 用「我」算的欄寬塞不下實際字 → 切欄錯 → 跨頁不連貫
 //   改用 getLineHeight(fontId)：直排每字格寬 = 字級高度（方塊字假設）
-//   wordSpacing 影響欄內字距；欄寬仍固定用 lineHeight，避免字距設定同時改變欄數。
-static int getVerticalColumnWidth(const GfxRenderer& renderer, const int fontId, const uint8_t wordSpacing) {
-  (void)wordSpacing;  // 直排不用 wordSpacing
-  return renderer.getLineHeight(fontId);
+//   直排軸向對應：
+//   - wordSpacing 只影響欄內上下字距
+//   - lineCompression 只影響欄與欄的水平距離
+static int getVerticalColumnWidth(const GfxRenderer& renderer, const int fontId, const float lineCompression) {
+  const int fontLineHeight = renderer.getLineHeight(fontId);
+  const int minColumnWidth = renderer.getVerticalTextCellHeight(fontId);
+  const int compressedWidth = static_cast<int>(fontLineHeight * lineCompression);
+  return std::max(minColumnWidth, compressedWidth);
 }
 
 // stage15.14 (SAM 移植): 直排把欄塞進當前 Page
 //   currentPageNextX 從右往左累計、滿一頁就 completePageFn
 //   PageLine xPos = 欄中心 X 座標
 void ChapterHtmlSlimParser::addVerticalColumnToPage(std::shared_ptr<TextBlock> column) {
-  const int columnWidth = getVerticalColumnWidth(renderer, fontId, wordSpacing);
+  const int columnWidth = getVerticalColumnWidth(renderer, fontId, lineCompression);
 
   if (currentPageNextX + columnWidth > viewportWidth) {
     completePageFn(std::move(currentPage));

@@ -580,7 +580,8 @@ void BaseTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
 
 void BaseTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount, int selectedIndex,
                                const std::function<std::string(int index)>& buttonLabel,
-                               const std::function<UIIcon(int index)>& /*rowIcon*/) const {
+                               const std::function<UIIcon(int index)>& /*rowIcon*/,
+                               int /*sdDirCount*/) const {
   for (int i = 0; i < buttonCount; ++i) {
     const int tileY = BaseMetrics::values.verticalSpacing + rect.y +
                       static_cast<int>(i) * (BaseMetrics::values.menuRowHeight + BaseMetrics::values.menuSpacing);
