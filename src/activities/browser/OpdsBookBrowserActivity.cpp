@@ -221,6 +221,9 @@ void OpdsBookBrowserActivity::loop() {
         const auto& entry = entries[selectorIndex];
         if (entry.type == OpdsEntryType::BOOK) {
           downloadBook(entry);
+        } else if (!nextPagePath.empty() && entry.href == nextPagePath) {
+          // stage32: 「下一頁 →」假 entry — 直接 fetch 新頁，不入歷史（返回鍵回該分類首頁）
+          navigateToFeed(nextPagePath, false);
         } else {
           navigateToEntry(entry);
         }
@@ -374,7 +377,8 @@ void OpdsBookBrowserActivity::fetchFeed(const std::string& path) {
   entries = std::move(parser).getEntries();
   nextPagePath = nextHref.empty() ? "" : UrlUtils::resolveUrl(url, nextHref);
   previousPagePath = previousHref.empty() ? "" : UrlUtils::resolveUrl(url, previousHref);
-  Serial.printf("[%lu] [OPDS] Found %d entries\n", millis(), entries.size());
+  Serial.printf("[%lu] [OPDS] Found %d entries, next=「%s」\n", millis(), entries.size(),
+                nextPagePath.c_str());
   selectorIndex = 0;
 
   if (entries.empty()) {
@@ -382,6 +386,16 @@ void OpdsBookBrowserActivity::fetchFeed(const std::string& path) {
     errorMessage = getChineseName("No entries found");
     updateRequired = true;
     return;
+  }
+
+  // stage32: 在清單尾巴插入「下一頁 →」假 entry（雙保險，搭配左右鍵翻頁並存）
+  // 嚕寶實測左右鍵翻 page 4 之後失效，用 confirm 鍵點假 entry 是 fallback
+  if (!nextPagePath.empty()) {
+    OpdsEntry pageEntry;
+    pageEntry.type = OpdsEntryType::NAVIGATION;
+    pageEntry.title = "下一頁 →";
+    pageEntry.href = nextPagePath;
+    entries.push_back(pageEntry);
   }
 
   state = BrowserState::BROWSING;
