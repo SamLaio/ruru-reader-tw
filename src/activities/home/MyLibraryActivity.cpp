@@ -701,9 +701,52 @@ void MyLibraryActivity::render() const {
   const auto labels = mappedInput.mapLabels("« 返回", "選擇", "左選", "右選");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
-  // stage32: popup 覆蓋（蓋在所有列表上面）
+  // stage32: 自畫多行 popup（GUI.drawPopup 只支援單行、訊息含 \n + 長檔名會超出螢幕）
   if (popupState != PopupState::NONE && !popupMessage.empty()) {
-    GUI.drawPopup(renderer, popupMessage.c_str());
+    const int screenW = renderer.getScreenWidth();
+    const int screenH = renderer.getScreenHeight();
+    const int lineH = renderer.getLineHeight(UI_12_FONT_ID);
+    constexpr int padX = 20;
+    constexpr int padY = 16;
+    const int maxW = screenW - 40;          // 訊息區最大寬（兩邊各留 20）
+    const int maxLineW = maxW - padX * 2;   // 文字最大寬
+
+    // 按 \n 切行
+    std::vector<std::string> lines;
+    {
+      std::string cur;
+      for (char c : popupMessage) {
+        if (c == '\n') { lines.push_back(cur); cur.clear(); }
+        else cur.push_back(c);
+      }
+      if (!cur.empty()) lines.push_back(cur);
+    }
+
+    // 每行用 truncatedText 截斷避免超寬
+    int contentW = 0;
+    for (auto& l : lines) {
+      l = renderer.truncatedText(UI_12_FONT_ID, l.c_str(), maxLineW);
+      const int lw = renderer.getTextWidth(UI_12_FONT_ID, l.c_str(), EpdFontFamily::BOLD);
+      if (lw > contentW) contentW = lw;
+    }
+
+    const int boxW = std::min(contentW + padX * 2, maxW);
+    const int boxH = static_cast<int>(lines.size()) * lineH + padY * 2;
+    const int boxX = (screenW - boxW) / 2;
+    const int boxY = (screenH - boxH) / 2;
+
+    // 黑外框 + 白內底（高對比）
+    renderer.fillRect(boxX - 3, boxY - 3, boxW + 6, boxH + 6, true);
+    renderer.fillRect(boxX, boxY, boxW, boxH, false);
+
+    // 逐行畫文字（垂直置中）
+    int yCursor = boxY + padY;
+    for (const auto& l : lines) {
+      const int lw = renderer.getTextWidth(UI_12_FONT_ID, l.c_str(), EpdFontFamily::BOLD);
+      const int textX = boxX + (boxW - lw) / 2;
+      renderer.drawText(UI_12_FONT_ID, textX, yCursor, l.c_str(), true, EpdFontFamily::BOLD);
+      yCursor += lineH;
+    }
   }
 
   renderer.displayBuffer();
