@@ -67,6 +67,17 @@ class MyLibraryActivity final : public ActivityWithSubactivity {
   const int topOptionCount = 5;
   char SEARCH_KEYWORD[100] = "賽博"; // 搜索关键词（示例：包含“赛博”的文件）
 
+  // stage32: 對話框/通知狀態（取代長按 Confirm 設計）
+  enum class PopupState {
+    NONE,
+    CONFIRM_DELETE,  // 刪除確認框（Confirm 確認 / Back 取消）
+    NOTICE_COPY,     // 已選取複製來源通知（任意鍵關閉）
+    NOTICE_CUT,      // 已選取剪下來源通知（任意鍵關閉）
+  };
+  PopupState popupState = PopupState::NONE;
+  std::string popupMessage;
+  std::string pendingDeletePath;
+
 
  public:
   explicit MyLibraryActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,

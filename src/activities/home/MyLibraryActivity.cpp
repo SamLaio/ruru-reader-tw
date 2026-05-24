@@ -348,6 +348,40 @@ void MyLibraryActivity::loop() {
       pendingSearch = false;
       updateRequired = true;
   }
+
+  // stage32: popup 狀態攔截 — 在 popup 期間其他鍵都不處理
+  if (popupState != PopupState::NONE) {
+    if (popupState == PopupState::CONFIRM_DELETE) {
+      if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+        Serial.printf("[刪除] 確認刪除：%s\n", pendingDeletePath.c_str());
+        deleteFileOrDir(pendingDeletePath);
+        if (isSearchMode) {
+          executeSearch();
+        } else {
+          loadFiles();
+        }
+        popupState = PopupState::NONE;
+        pendingDeletePath.clear();
+        popupMessage.clear();
+        updateRequired = true;
+      } else if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+        Serial.printf("[刪除] 取消\n");
+        popupState = PopupState::NONE;
+        pendingDeletePath.clear();
+        popupMessage.clear();
+        updateRequired = true;
+      }
+    } else {
+      // NOTICE_COPY / NOTICE_CUT — 任意鍵關閉
+      if (mappedInput.wasAnyReleased()) {
+        popupState = PopupState::NONE;
+        popupMessage.clear();
+        updateRequired = true;
+      }
+    }
+    return;  // popup 期間不跑下面的列表選擇邏輯
+  }
+
   // Long press BACK (1s+) goes to root folder
   if (mappedInput.isPressed(MappedInputManager::Button::Back) && mappedInput.getHeldTime() >= GO_HOME_MS &&
       basepath != "/") {
@@ -419,32 +453,49 @@ void MyLibraryActivity::loop() {
         updateRequired = true;
         return;
 
-      case TopOption::DELETE: 
-        if (mappedInput.getHeldTime() >= 500) {
-          deleteFileOrDir(fullPath); // 改用统一的fullPath
-          // 删除后刷新列表（区分模式）
-          if (isSearchMode) {
-            executeSearch(); // 搜索模式：重新搜索
-          } else {
-            loadFiles();     // 普通模式：重新加载
+      case TopOption::DELETE:
+        // stage32: 改為點一下跳確認對話框（取代長按 0.5s）
+        pendingDeletePath = fullPath;
+        popupState = PopupState::CONFIRM_DELETE;
+        {
+          // 顯示「刪除『xxx』？」訊息（只取檔名部分）
+          std::string displayName = selectedItem;
+          if (!displayName.empty() && displayName.back() == '/') {
+            displayName.pop_back();
           }
-        } else {
-          Serial.printf("[刪除] 需長按Confirm確認刪除\n");
+          popupMessage = std::string("刪除「") + displayName + "」？\nConfirm 確認 / Back 取消";
         }
+        updateRequired = true;
         break;
 
-      case TopOption::COPY: 
-        copySourcePath = fullPath; // 改用统一的fullPath
+      case TopOption::COPY:
+        copySourcePath = fullPath;
         hasCopyData = true;
         isCutMode = false;
         Serial.printf("[複製] 已選中：%s\n", copySourcePath.c_str());
+        // stage32: 顯示通知 popup，任意鍵關閉
+        popupState = PopupState::NOTICE_COPY;
+        {
+          std::string displayName = selectedItem;
+          if (!displayName.empty() && displayName.back() == '/') displayName.pop_back();
+          popupMessage = std::string("已選取「") + displayName + "」為複製來源\n移到目標資料夾按貼上";
+        }
+        updateRequired = true;
         break;
 
-      case TopOption::CUT: 
-        copySourcePath = fullPath; // 改用统一的fullPath
+      case TopOption::CUT:
+        copySourcePath = fullPath;
         hasCopyData = true;
         isCutMode = true;
         Serial.printf("[剪下] 已選中：%s（貼上後將刪除原始檔）\n", copySourcePath.c_str());
+        // stage32: 顯示通知 popup，任意鍵關閉
+        popupState = PopupState::NOTICE_CUT;
+        {
+          std::string displayName = selectedItem;
+          if (!displayName.empty() && displayName.back() == '/') displayName.pop_back();
+          popupMessage = std::string("已選取「") + displayName + "」為剪下來源\n貼上時會刪除原檔";
+        }
+        updateRequired = true;
         break;
 
       case TopOption::PASTE: 
@@ -649,6 +700,11 @@ void MyLibraryActivity::render() const {
   // Help text
   const auto labels = mappedInput.mapLabels("« 返回", "選擇", "左選", "右選");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+
+  // stage32: popup 覆蓋（蓋在所有列表上面）
+  if (popupState != PopupState::NONE && !popupMessage.empty()) {
+    GUI.drawPopup(renderer, popupMessage.c_str());
+  }
 
   renderer.displayBuffer();
 }
