@@ -1,13 +1,14 @@
 <h1 align="center">ruru-reader-tw</h1>
 
 <p align="center"><strong>Traditional Chinese firmware for the YueXingTong X4 e-reader.</strong><br>
-Source Han Sans TC subset · multilingual UI · BT page-turn · large books · vertical layout</p>
+OPDS cloud library · Source Han Sans TC subset · multilingual UI · BT page-turn · large books · vertical layout</p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/license-MIT_%2B_PolyForm_NC-D4A5A5?style=flat-square" alt="Dual License">
   <img src="https://img.shields.io/badge/platform-ESP32--C3-B8A9C9?style=flat-square" alt="ESP32-C3">
   <img src="https://img.shields.io/badge/font-Source_Han_Sans_TC-A8B5A0?style=flat-square" alt="Source Han Sans TC">
-  <img src="https://img.shields.io/badge/stage-15.48-E8B4B8?style=flat-square" alt="Stage 15.48">
+  <img src="https://img.shields.io/badge/OPDS-supported-9B7E93?style=flat-square" alt="OPDS Supported">
+  <img src="https://img.shields.io/badge/stage-29-E8B4B8?style=flat-square" alt="Stage 29">
 </p>
 
 <p align="center">
@@ -17,8 +18,8 @@ Source Han Sans TC subset · multilingual UI · BT page-turn · large books · v
 ---
 
 > **Dual License Notice** — Upstream code is MIT (commercial use OK).
-> HelloRuru's stage 8 to stage 15.48 modifications are under PolyForm Noncommercial 1.0.0.
-> Commercial use of HelloRuru's work requires a separate license — contact <hello@helloruru.com>.
+> HelloRuru's stage 8 to stage 29 modifications are under PolyForm Noncommercial 1.0.0.
+> **Personal / open-source / learning use is free; commercial use requires a separate license** — contact <hello@helloruru.com>.
 > See [LICENSE](LICENSE) for full terms.
 
 ---
@@ -27,7 +28,16 @@ Source Han Sans TC subset · multilingual UI · BT page-turn · large books · v
 
 The **YueXingTong X4** (閱星曈 X4) is an ESP32-C3 e-reader with 320KB RAM, 16MB flash, no PSRAM. The stock firmware (ChineseType) is primarily for Simplified Chinese users and bundles cloud services Traditional Chinese readers don't need.
 
-This fork makes the X4 a great reader for Traditional Chinese users while keeping a switchable UI for Simplified Chinese and English:
+This fork makes the X4 a great reader for Traditional Chinese users while keeping a switchable UI for Simplified Chinese and English.
+
+### 🆕 What's new in stage29
+
+- **OPDS cloud library** — browse your computer's book library straight from the main menu (pairs with [SamLaio/dir2opds](https://github.com/SamLaio/dir2opds)). Up/Down to pick a book, Left/Right to flip OPDS pages, Confirm to download to SD card.
+- **Multi-format auto-detection** — downloads correctly identify EPUB / PDF / CBZ / MOBI / TXT / ZIP and use the right extension (fixes the legacy double-extension bug).
+- **HTTP status code diagnostics** — OPDS download failures show the actual `HTTP 404 / 503` so you can debug server-side issues.
+- **OTA online update removed** — saves 127 KB flash space (use USB flashing instead).
+
+### Existing features (stage 1-29 accumulation)
 
 - **Source Han Sans TC subset font** — UI, book titles, and reader body all switched over.
 - **Multilingual UI** — interface strings centralised in `src/LanguageMapper.h`, with Traditional Chinese, Simplified Chinese, and English.
@@ -41,16 +51,34 @@ This fork makes the X4 a great reader for Traditional Chinese users while keepin
 - **Carousel home** — covers, recent reads, and progress bars.
 - **HelloRuru rabbit boot and sleep screens**.
 
+### Main menu layout (stage29)
+
+```text
+┌──────────────────────────────────────┐
+│       [ Recent book covers ]         │
+├──────────────────────────────────────┤
+│   ╔════════════╦════════════╗       │
+│   ║   Files    ║    OPDS    ║       │
+│   ╚════════════╩════════════╝       │
+├──────────────────────────────────────┤
+│   [ WiFi ][ Settings ][ BT ]         │
+└──────────────────────────────────────┘
+```
+
 ## Installation
 
 ### 1. Choose a firmware
 
-Latest builds live in `release/`:
+Latest builds are on [GitHub Releases](https://github.com/HelloRuru/ruru-reader-tw/releases):
 
-| Build | Use case | File | SHA256 |
-| :--- | :--- | :--- | :--- |
-| **stage15.48** | Latest test build; Source Han Sans, multilingual UI, BT disable hardening | `ruru-reader-tw-stage15.48-20260515.bin` | `66CA892D997A5CE967007F3A978891F4F40440E1F8E48EA9FD34267DEB4ED9AC` |
-| **stage15.46** | Latest verified-stable baseline | `ruru-reader-tw-stage15.46-20260515.bin` | `90E4B8F2A194D3D8B4B32A018F124B8017871FD4D91831F1D59BFC0377F4166B` |
+| Build | Use case | File |
+| :--- | :--- | :--- |
+| 🌟 **stage29** | **Latest public release**; OPDS full support, multi-format detection, side-key pagination, HTTP diagnostics, OTA removed | [`Ruru-Reader-stage29-monoink.bin`](https://github.com/HelloRuru/ruru-reader-tw/releases/tag/stage29-opds) |
+| stage15.55 | Legacy baseline; 10pt restored, 17pt reader common7000 subset | `ruru-reader-tw-stage15.55-20260516.bin` |
+| stage15.48 | Source Han Sans, multilingual UI, BT disable hardening | `ruru-reader-tw-stage15.48-20260515.bin` |
+| stage15.46 | Verified-stable baseline | `ruru-reader-tw-stage15.46-20260515.bin` |
+
+> Legacy stage15.x builds are kept for reference; new installs should use **stage29**.
 
 ### 2. Flash via web
 
@@ -60,17 +88,45 @@ Open <https://flasher.crosspoint.world/> in **Chrome** (WebSerial required). Con
 
 ```bash
 esptool.py --chip esp32c3 --port /dev/ttyUSB0 --baud 921600 \
-  write_flash -z 0x10000 release/ruru-reader-tw-stage15.48-20260515.bin
+  write_flash -z 0x10000 release/Ruru-Reader-stage29-monoink.bin
 ```
 
 ### 4. First-boot setup
 
 1. Power on.
-2. Settings → Bluetooth → enable Bluetooth.
-3. Scan, pick your page-turner, connect.
-4. Subsequent boots restore the saved state.
+2. Settings → Bluetooth → enable Bluetooth (if you have a page-turner).
+3. Settings → WiFi → connect to your home network (required for OPDS).
+4. Settings → OPDS Browser → enter server URL (see [OPDS cloud library](#opds-cloud-library) below).
+5. Subsequent boots restore the saved state.
 
-> When upgrading to stage 15, consider deleting `.crosspoint/` on the SD card so book caches are rebuilt. Settings (BT state, fonts, margins) are preserved; stage15.48 settings file version is `9`, with a new language field defaulting to Traditional Chinese.
+> When upgrading to stage29, consider deleting `.crosspoint/` on the SD card so book caches are rebuilt. Settings are preserved.
+
+## OPDS cloud library
+
+Stage29 adds an OPDS browser so you can pull books from a computer-side OPDS server straight to the SD card, no USB needed.
+
+### Pairs with SamLaio/dir2opds
+
+This firmware's OPDS feature is designed to **pair with [SamLaio/dir2opds](https://github.com/SamLaio/dir2opds)** — a lightweight tool that turns any folder into an OPDS server. See the upstream repo for installation.
+
+### Three-step setup
+
+1. **Computer side**: launch dir2opds pointing at your book library folder (defaults to port 8080).
+2. **YueXingTong side**: Settings → OPDS Browser → enter `http://<computer-IP>:8080` (not `127.0.0.1` — the YueXingTong can't reach it).
+3. **Browse**: tap the OPDS large button on the main menu to browse, pick, and download.
+
+### Controls
+
+```text
+┌─ In book list ──────────────────────────┐
+│   ↑ ↓  Select book / option              │
+│   ← →  Flip OPDS page (large libraries)  │
+│   ●    Confirm (open folder / download)  │
+│   ⏴    Back to previous level             │
+└──────────────────────────────────────────┘
+```
+
+Download failures show the HTTP status code (e.g. `Download failed: HTTP 404`) for easy debugging.
 
 ## Verified hardware
 
@@ -80,7 +136,8 @@ esptool.py --chip esp32c3 --port /dev/ttyUSB0 --baud 921600 \
 | :--- | :--- | :--- | :--- |
 | iDal-10822 | Works | Works, keycode `0x4E` | Daily driver |
 | E1 Control | Works | Works, keycode `0x4B` | Backup |
-| HBTR003-XT | Unstable | - | RPA instability; iDal / E1 recommended |
+| HBTR003-XT | Works | Works | Stable after stage7-9 BT fixes (RPA / addrType / heap) |
+| Keykey mini | Works | Works | — |
 
 ### Large EPUB compatibility
 
@@ -190,6 +247,17 @@ ruru-reader-tw/
 5. **Centralise UI text first, wire incrementally**
    New strings go into `LanguageMapper`. Screens already wired to the mapper switch with language; remaining hard-coded strings are migrated over time.
 
+## Known limitations
+
+| Area | Limitation | Impact / Notes |
+| :--- | :--- | :--- |
+| OPDS auth | Basic Auth (plain base64) | Best used on LAN; for public access add a reverse proxy |
+| OPDS HTTPS | Accepted but uses `setInsecure()` — no cert verification | Fine for self-signed; doesn't block MITM |
+| OPDS catalog | Only walks root → category → books (3 levels) | No OPDS 1.2 catalog discovery |
+| OTA update | Removed in stage29 | Use USB flashing; saves 127 KB flash |
+| Reader fonts | Subset by point size (10/12/17pt) | Rare characters may be missing; upload custom `.epdfont` to fill |
+| BT page-turner | Field-tested with iDal-10822 / E1 Control / HBTR003-XT / Keykey mini | Other models may need keycode profile changes |
+
 ## Acknowledgments
 
 | Upstream | Author | Contribution |
@@ -198,7 +266,8 @@ ruru-reader-tw/
 | CrossInk | uxjulia | Intermediate Chinese-friendly fork |
 | CrossInk-Carousel | chintanvajariya | UI theme system (Lyra / Flow / 3Covers) |
 | [crosspoint-chinesetype](https://github.com/icannotttt/crosspoint-chinesetype) | icannotttt | Chinese localisation, JianGuo cloud, KOReader sync, BT skeleton |
-| [crosspoint-chinesetype](https://github.com/SamLaio/crosspoint-chinesetype) | SamLaio | Parallel Traditional Chinese fork; vertical layout and multilingual-UI reference |
+| [crosspoint-chinesetype](https://github.com/SamLaio/crosspoint-chinesetype) | SamLaio | Vertical layout and multilingual-UI reference; **stage28.9 adopts upstream OPDS Parser / Activity / HttpDownloader / UrlUtils wholesale** |
+| [dir2opds](https://github.com/SamLaio/dir2opds) | SamLaio | Recommended OPDS server companion; this firmware's OPDS feature targets it |
 
 Fonts:
 
@@ -218,7 +287,7 @@ This project uses a **dual-license model**. See [LICENSE](LICENSE) for full term
 | Code | License | Commercial use |
 | :--- | :--- | :--- |
 | Upstream (Dave Allie, uxjulia, etc.) | MIT | Allowed |
-| HelloRuru modifications (stage 8–15.48) | PolyForm Noncommercial 1.0.0 | Requires a separate commercial license |
+| HelloRuru modifications (stage 8–29) | PolyForm Noncommercial 1.0.0 | Requires a separate commercial license |
 | Source Han Sans | SIL Open Font License 1.1 | Per OFL |
 | jf-openhuninn (legacy) | CC BY 4.0 | With attribution |
 
