@@ -10,7 +10,7 @@
 #include <utility>
 
 #include "../Activity.h"
-#include "network/KeyboardWebInputServer.h"
+#include "network/KeyboardWebinputServer.h"
 #include "util/ButtonNavigator.h"
 
 /**
